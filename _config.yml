@@ -177,7 +177,6 @@ exclude:
   - gulpfile.js
   - LICENSE
   - local
-  - log
   - node_modules
   - package.json*
   - Rakefile
