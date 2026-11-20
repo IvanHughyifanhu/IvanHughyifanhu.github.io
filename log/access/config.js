@@ -1,0 +1,1 @@
+window.LOG_ACCESS=Object.freeze({"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "44b7d87cddcfb177076b1d5d4dde538426c45530", "authMode": "github-pat-v1", "repositoryId": 1465610041});
