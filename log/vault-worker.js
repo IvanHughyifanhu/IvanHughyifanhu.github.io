@@ -1,0 +1,345 @@
+'use strict';
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "44b7d87cddcfb177076b1d5d4dde538426c45530", "authMode": "github-pat-v1", "repositoryId": 1465610041};
+// Pure data rules used by the prototype and its tests.
+const SCHEMA = 'journal-events-v1';
+const DAY = 86400000;
+function dayWindow(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('日期格式无效');
+  const start = Date.parse(date + 'T00:00:00+08:00');
+  if (!Number.isFinite(start) || new Date(start + 8*3600000).toISOString().slice(0,10) !== date) throw new Error('日期不存在');
+  return [start, start + DAY];
+}
+function mergeIntervals(intervals) {
+  const sorted = intervals.filter(([a,b]) => b>a).map(x=>[...x]).sort((a,b)=>a[0]-b[0]);
+  const merged=[];
+  for (const [a,b] of sorted) {
+    const last=merged.at(-1);
+    if (last && a<=last[1]) last[1]=Math.max(last[1],b); else merged.push([a,b]);
+  }
+  return merged;
+}
+function summarizeRuns(runs,date) {
+  const [ds,de]=dayWindow(date), intervals=[], perRun=[];
+  // Count execution leaves, not their coordinating parent a second time.
+  const parentIds=new Set(runs.map(r=>r.parentId).filter(Boolean));
+  let uncertain=0, inputTokens=0, outputTokens=0;
+  const seen=new Set();
+  for (const run of runs) {
+    if (seen.has(run.id)) continue;
+    seen.add(run.id);
+    if (parentIds.has(run.id)) continue;
+    let pieces=[];
+    for (const seg of run.segments || []) {
+      const a=Date.parse(seg.start), b=Date.parse(seg.end || run.lastHeartbeat || '');
+      if (!seg.end) uncertain++;
+      if (!Number.isFinite(a)||!Number.isFinite(b)||b<a) continue;
+      if (a<de && b>ds) pieces.push([Math.max(a,ds),Math.min(b,de)]);
+    }
+    pieces=mergeIntervals(pieces);
+    // Token attribution requires timestamped usage events; never prorate a whole run.
+    for (const u of run.usageEvents || []) {
+      const t=Date.parse(u.at);
+      if (t>=ds && t<de) {inputTokens+=u.inputTokens||0;outputTokens+=u.outputTokens||0;}
+    }
+    const ms=pieces.reduce((v,[a,b])=>v+b-a,0);
+    if (!ms) continue;
+    intervals.push(...pieces); perRun.push({id:run.id,name:run.name,ms,intervals:pieces});
+  }
+  const union=mergeIntervals(intervals), changes=[];
+  intervals.forEach(([a,b])=>changes.push([a,1],[b,-1]));
+  changes.sort((a,b)=>a[0]-b[0] || a[1]-b[1]);
+  let current=0,peak=0;
+  for (const [,n] of changes) {current+=n;peak=Math.max(peak,current);}
+  return {taskHours:perRun.reduce((s,r)=>s+r.ms,0)/3600000,coverageHours:union.reduce((s,[a,b])=>s+b-a,0)/3600000,peak,inputTokens,outputTokens,uncertain,perRun};
+}
+function validateEvents(events) {
+  if (!Array.isArray(events) || events.length>100000) throw new Error('记录数量或格式无效');
+  const ids=new Map();
+  for (const e of events) {
+    if (!e || typeof e.id!=='string' || !e.id || typeof e.recordId!=='string' || !e.recordId || !Array.isArray(e.parents) || !['create','revise','archive','restore','resolve'].includes(e.op) || !Number.isFinite(Date.parse(e.at))) throw new Error('事件格式无效');
+    if (ids.has(e.id)) throw new Error('备份内有重复事件编号');
+    if (!e.data || typeof e.data.text!=='string' || !e.data.text.trim() || e.data.text.length>20000 || typeof e.data.archived!=='boolean' || typeof e.data.projectId!=='string' || !['note','action','calendar','artifact'].includes(e.data.type)) throw new Error('内容格式无效');
+    dayWindow(e.data.date);
+    if(e.data.calendar!==undefined){
+      const c=e.data.calendar;
+      if(!c||!['event','deadline'].includes(c.kind)||typeof c.time!=='string'||(c.time&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(c.time)))throw new Error('日程时间格式无效');
+    }
+    ids.set(e.id,e);
+  }
+  const roots=new Map(),visiting=new Set(),visited=new Set();
+  for (const e of events) {
+    if (!e.parents.length) {
+      if(e.op!=='create'||roots.has(e.recordId)) throw new Error('原始记录重复或缺少来源');
+      roots.set(e.recordId,e.id);
+    } else if(e.op==='create') throw new Error('原始记录不能有前序');
+    for (const p of e.parents) if(!ids.has(p)||ids.get(p).recordId!==e.recordId) throw new Error('修改记录缺少同一记录的前序');
+  }
+  function visit(id) {if(visiting.has(id)) throw new Error('修改记录形成循环');if(visited.has(id))return;visiting.add(id);ids.get(id).parents.forEach(visit);visiting.delete(id);visited.add(id);}
+  for (const e of events) {if(!roots.has(e.recordId)) throw new Error('缺少原文');visit(e.id);}
+  return events;
+}
+function stableEventJSON(value){return JSON.stringify(value&&typeof value==='object'?Array.isArray(value)?value.map(v=>JSON.parse(stableEventJSON(v))):Object.fromEntries(Object.keys(value).sort().map(k=>[k,JSON.parse(stableEventJSON(value[k]))])):value);}
+function mergeEvents(existing,incoming) {
+  validateEvents(existing); validateEvents(incoming);
+  const map=new Map(existing.map(e=>[e.id,e]));
+  for(const e of incoming) {
+    if(map.has(e.id) && stableEventJSON(map.get(e.id))!==stableEventJSON(e)) throw new Error('同一事件编号内容不同；保留本机数据，导入已停止');
+    map.set(e.id,e);
+  }
+  return validateEvents([...map.values()]);
+}
+function materialize(events) {
+  const groups=new Map();
+  for(const e of events) {if(!groups.has(e.recordId))groups.set(e.recordId,[]);groups.get(e.recordId).push(e);}
+  return [...groups.entries()].map(([id,list])=>{
+    const used=new Set(list.flatMap(e=>e.parents));
+    const heads=list.filter(e=>!used.has(e.id)).sort((a,b)=>a.id.localeCompare(b.id));
+    const root=list.find(e=>e.op==='create');
+    // Conflicting heads remain visible; no clock-based last-write-wins.
+    return {id,heads,conflict:heads.length>1,rawText:root.data.text,createdAt:root.at,history:list, data:heads.length===1?heads[0].data:null};
+  }).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+}
+function makeBackup(events,projects,at=new Date().toISOString()) {
+  validateEvents(events);
+  return {schema:SCHEMA,exportedAt:at,timezone:'Asia/Shanghai',scope:'本机原型文字事件及只读项目名册；不含音频、云端数据或AI演示统计',counts:{events:events.length,records:materialize(events).length,projects:projects.length},events,projects};
+}
+function readBackup(value) {
+  if(value?.schema!==SCHEMA)throw new Error('不是兼容的手账备份');
+  validateEvents(value.events);
+  if(value.counts?.events!==value.events.length || value.counts?.records!==materialize(value.events).length)throw new Error('备份记录计数不一致');
+  return value.events;
+}
+function coursesForDate(config,date) {
+  const [t]=dayWindow(date), [first]=dayWindow(config.week_1_monday);
+  const week=Math.floor((t-first)/DAY/7)+1, weekday=(new Date(t+8*3600000).getUTCDay()+6)%7;
+  return config.courses.filter(c=>c.weeks[0]<=week&&week<=c.weeks[1]&&c.weekdays.includes(weekday));
+}
+
+function dateOffset(date,days){
+  const [t]=dayWindow(date);
+  return new Date(t+28800000+days*DAY).toISOString().slice(0,10);
+}
+function monthOffset(month,delta){
+  dayWindow(month+'-01');
+  const [y,m]=month.split('-').map(Number);
+  return new Date(Date.UTC(y,m-1+delta,1)).toISOString().slice(0,7);
+}
+function calendarCells(month){
+  const first=month+'-01',[t]=dayWindow(first),weekday=(new Date(t+28800000).getUTCDay()+6)%7;
+  return Array.from({length:42},(_,i)=>dateOffset(first,i-weekday));
+}
+function overviewDateRange(month,scale='month',projects=[]){
+  dayWindow(month+'-01');
+  let start=month+'-01',end=dateOffset(monthOffset(month,1)+'-01',-1);
+  if(scale==='quarter'){
+    const [y,m]=month.split('-').map(Number),q=Math.floor((m-1)/3)*3+1;
+    start=`${y}-${String(q).padStart(2,'0')}-01`;end=dateOffset(monthOffset(start.slice(0,7),3)+'-01',-1);
+  }else if(scale==='year'){start=month.slice(0,4)+'-01-01';end=month.slice(0,4)+'-12-31';}
+  else if(scale==='all'&&projects.length){
+    const periods=projects.map(p=>p.period).filter(p=>p?.start&&p?.end);
+    if(periods.length){start=periods.map(p=>p.start).sort()[0];end=periods.map(p=>p.end).sort().at(-1);}
+  }
+  return {start,end};
+}
+// All views, including the day page, consume this same read model.
+function buildCalendarItems(config,events,start,end,{fixed=true}={}){
+  const [a]=dayWindow(start),[,b]=dayWindow(end);
+  if(b<=a||b-a>367*DAY)throw new Error('查看范围需在一年以内');
+  const items=[];
+  if(fixed)for(let date=start;date<=end;date=dateOffset(date,1)){
+    for(const c of coursesForDate(config,date))items.push({id:`course:${c.id}:${date}`,date,title:c.display_name,kind:'calendar',source:'course',time:c.start,timeLabel:`${c.start}–${c.end}`,location:c.location,projectId:'',courseId:c.id});
+    const [t]=dayWindow(date),wd=(new Date(t+28800000).getUTCDay()+6)%7;
+    if(wd===3||wd===4)items.push({id:`work:${date}`,date,title:'档案馆',kind:'calendar',source:'fixed_work',time:'',timeLabel:'上午、下午',location:'',projectId:''});
+    if(date==='2026-11-09')items.push({id:'exam:japanese:2026-11-09',date,title:'日语期中考试',kind:'calendar',source:'fixed_event',time:'',timeLabel:'当天',location:'',projectId:''});
+  }
+  for(const record of materialize(events))for(const head of record.heads){
+    const d=head.data;if(d.archived||d.date<start||d.date>end)continue;
+    const kind=record.conflict?'conflict':d.type==='calendar'?(d.calendar?.kind==='deadline'?'deadline':'calendar'):d.type;
+    const time=d.type==='calendar'?(d.calendar?.time||''):'';
+    items.push({id:`record:${record.id}:${head.id}`,recordId:record.id,date:d.date,title:d.text,kind,source:'record',recordType:d.type,projectId:d.projectId,time,timeLabel:time||(kind==='deadline'?'ddl':kind==='calendar'?'全天':kind==='action'?'行动':kind==='artifact'?'成果':kind==='conflict'?'待合并':'备忘'),location:'',createdAt:head.at,conflict:record.conflict});
+  }
+  return items.sort((x,y)=>x.date.localeCompare(y.date)||(x.time||'').localeCompare(y.time||'')||(x.createdAt||'').localeCompare(y.createdAt||'')||x.id.localeCompare(y.id));
+}
+function projectGanttRows(projects,events,range){
+  const [a]=dayWindow(range.start),[,b]=dayWindow(range.end),duration=b-a;
+  const records=materialize(events);
+  return projects.flatMap(project=>{
+    const [ps]=dayWindow(project.period.start),[,pe]=dayWindow(project.period.end);
+    const linked=records.filter(r=>r.heads.some(h=>!h.data.archived&&h.data.projectId===project.id&&h.data.date>=range.start&&h.data.date<=range.end));
+    const milestones=linked.filter(r=>!r.conflict&&r.data.type==='calendar').map(r=>{
+      const [t]=dayWindow(r.data.date);
+      return {recordId:r.id,date:r.data.date,title:r.data.text,kind:r.data.calendar?.kind==='deadline'?'deadline':'calendar',left:((t-a+DAY/2)/duration)*100};
+    });
+    const left=Math.max(ps,a),right=Math.min(pe,b);
+    if(right<=left&&!linked.length)return [];
+    return [{project,records:linked.length,milestones,bar:right>left?{left:(left-a)/duration*100,width:(right-left)/duration*100,clippedStart:ps<a,clippedEnd:pe>b}:null}];
+  });
+}
+
+
+const CLOUD_SCHEMA='log-cloud-v1';
+const canonical=value=>JSON.stringify(value&&typeof value==='object'?Array.isArray(value)?value.map(v=>JSON.parse(canonical(v))):Object.fromEntries(Object.keys(value).sort().map(k=>[k,JSON.parse(canonical(value[k]))])):value);
+function validateCatalog(projects,courses){
+  if(!Array.isArray(projects)||projects.length>2000)throw new Error('项目名册格式无效');
+  const ids=new Set();
+  for(const p of projects){
+    if(!p||typeof p.id!=='string'||!p.id||ids.has(p.id)||!Array.isArray(p.headings)||!p.headings.length||p.headings.some(h=>typeof h!=='string'||!h.trim()))throw new Error('项目名册内容无效');
+    dayWindow(p.period?.start);dayWindow(p.period?.end);if(p.period.end<p.period.start)throw new Error('项目跟进期无效');ids.add(p.id);
+  }
+  if(!courses||!Array.isArray(courses.courses))throw new Error('课表格式无效');
+  dayWindow(courses.week_1_monday);
+  for(const c of courses.courses){
+    if(!c||typeof c.id!=='string'||typeof c.display_name!=='string'||typeof c.location!=='string'||!Array.isArray(c.weekdays)||!Array.isArray(c.weeks)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(c.start)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(c.end)||c.end<=c.start)throw new Error('课表内容无效');
+  }
+  return true;
+}
+function cloudSnapshot(events,projects,courses){
+  validateEvents(events);validateCatalog(projects,courses);
+  return {schema:CLOUD_SCHEMA,events,projects,courses};
+}
+function readCloudSnapshot(data){
+  if(data?.schema!==CLOUD_SCHEMA)throw new Error('云端数据格式不兼容，未覆盖现有记录');
+  return cloudSnapshot(data.events,data.projects,data.courses);
+}
+function mergeCloudSnapshots(local,remote){
+  readCloudSnapshot(local);readCloudSnapshot(remote);
+  const projects=new Map(local.projects.map(p=>[p.id,p]));
+  for(const p of remote.projects){
+    if(projects.has(p.id)&&canonical(projects.get(p.id))!==canonical(p))throw new Error('项目名册存在不同版本；本机与云端均已保留，请先合并名册');
+    projects.set(p.id,p);
+  }
+  let courses=local.courses;
+  if(!courses.courses.length)courses=remote.courses;
+  else if(remote.courses.courses.length&&canonical(courses)!==canonical(remote.courses))throw new Error('课表存在不同版本；现有数据未覆盖');
+  return cloudSnapshot(mergeEvents(local.events,remote.events),[...projects.values()].sort((a,b)=>(a.sourceLeaf||0)-(b.sourceLeaf||0)||a.id.localeCompare(b.id)),courses);
+}
+
+const base=new URL(CONFIG.basePath,self.location.origin),repo='repos/'+CONFIG.owner+'/'+CONFIG.repository;
+const publicFiles=new Set(["vault-worker.js", "manifest.webmanifest", "favicon.ico", "apple-touch-icon.png", "icons/icon.svg", "icons/wordmark.svg", "icons/favicon-32.png", "icons/apple-touch-icon-167.png", "icons/apple-touch-icon-152.png", "icons/app-192.png", "icons/app-512.png", "icons/maskable-512.png", "access/login.html", "access/login.css", "access/config.js", "access/session.js", "access/protect.js", "access/login.js", "access/wordmark.svg"].map(p=>new URL(p,base).pathname));
+const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
+const forcedHeaders={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'};
+const pagePolicy="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'";
+const b64=bytes=>btoa(Array.from(new Uint8Array(bytes),n=>String.fromCharCode(n)).join(''));
+const unb64=value=>Uint8Array.from(atob(value.replaceAll('-','+').replaceAll('_','/')),s=>s.charCodeAt(0));
+const dbPromise=new Promise((resolve,reject)=>{const r=indexedDB.open('log-github-access-v1',1);r.onupgradeneeded=()=>r.result.createObjectStore('session');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+async function db(op,value){const database=await dbPromise;return new Promise((resolve,reject)=>{const tx=database.transaction('session',op==='get'?'readonly':'readwrite'),s=tx.objectStore('session');const q=op==='get'?s.get(base.href):op==='put'?s.put(value,base.href):s.delete(base.href);tx.oncomplete=()=>resolve(q.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}
+let state,manifestPromise,generation=0,writeQueue=Promise.resolve();
+async function forget(){generation++;state=null;manifestPromise=null;await db('delete');for(const tab of await self.clients.matchAll({type:'window'}))if(tab.url.startsWith(base.href))tab.postMessage({type:'private-logout'});}
+async function session(){if(state===undefined){const before=generation,stored=await db('get');if(before===generation&&state===undefined)state=stored||null;}if(state&&(state.auth!=='github-pat-v1'||state.expires<=Date.now()))await forget();return state;}
+async function github(path,token,{raw=false,method='GET',body}={}){
+ const response=await fetch('https://api.github.com/'+path,{method,headers:{Authorization:'Bearer '+token,Accept:raw?'application/vnd.github.raw+json':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(20000)});
+ if(!response.ok){const err=new Error(response.status===401?'GitHub 访问凭据已失效，请重新连接。':response.status===403||response.status===404?'无法访问 log 私有仓库，请检查访问凭据的仓库和读写权限。':'GitHub 暂时无法连接，本机记录已保留。');err.status=response.status;throw err;}
+ return raw?response.arrayBuffer():response.json();
+}
+const vaultPath=name=>repo+'/contents/'+name+'?ref='+encodeURIComponent(CONFIG.revision);
+async function decrypt(key,bytes,name){const b=new Uint8Array(bytes);if(b.length<29)throw new Error('加密文件不完整。');return crypto.subtle.decrypt({name:'AES-GCM',iv:b.subarray(0,12),additionalData:encoder.encode('log-vault:v1:'+name)},key,b.subarray(12));}
+async function encrypt(key,bytes,name){const iv=crypto.getRandomValues(new Uint8Array(12)),body=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:encoder.encode('log-vault:v1:'+name)},key,bytes),packet=new Uint8Array(12+body.byteLength);packet.set(iv);packet.set(new Uint8Array(body),12);return packet;}
+async function inflate(bytes){return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();}
+async function ciphertext(name,active){
+ const cache=await caches.open('log-ciphertext-v1:'+base.pathname),url=new URL('access/cipher/'+CONFIG.revision+'/'+name,base);
+ const existing=await cache.match(url);if(existing)return existing.arrayBuffer();
+ const bytes=await github(vaultPath(name),active.token,{raw:true});await cache.put(url,new Response(bytes));return bytes;
+}
+async function manifest(active){const bytes=await ciphertext('manifest.bin',active),m=JSON.parse(decoder.decode(await inflate(await decrypt(active.key,bytes,'manifest'))));if(m.version!==1||!m.files?.['index.html']||!m.files?.['log-app.js'])throw new Error('应用目录有误。');return m.files;}
+async function readingKey(token){
+ const raw=await github(repo+'/contents/access/key.json?ref='+encodeURIComponent(CONFIG.branch),token,{raw:true}),setting=JSON.parse(decoder.decode(raw));
+ if(setting.version!==1||setting.ownerId!==CONFIG.ownerId||setting.repositoryId!==CONFIG.repositoryId||!/^[A-Za-z0-9_-]{43}$/.test(setting.key||''))throw new Error('私有仓库密钥配置有误。');
+ const clear=unb64(setting.key);if(clear.byteLength!==32)throw new Error('私有仓库密钥配置有误。');return crypto.subtle.importKey('raw',clear,'AES-GCM',false,['decrypt','encrypt']);
+}
+async function verifyWrite(active){
+ // A same-content commit verifies write access without inventing a journal record.
+ for(let attempt=0;attempt<3;attempt++){
+  const file=await snapshotFile(active);
+  readCloudSnapshot(JSON.parse(decoder.decode(await decrypt(active.key,file.bytes,'snapshot'))));
+  try{await github(repo+'/contents/data/snapshot.bin',active.token,{method:'PUT',body:{message:'log: verify owner connection',content:b64(file.bytes),sha:file.sha,branch:CONFIG.branch}});return;}
+  catch(error){if(error.status!==409&&error.status!==422)throw error;}
+ }
+ throw new Error('其他设备正在同步，请稍后连接。');
+}
+async function signIn(token){
+ if(typeof token!=='string'||!/^github_pat_[A-Za-z0-9_]{40,255}$/.test(token))throw new Error('请使用仅限 log-private 的细粒度访问凭据。');
+ if(!CONFIG.revision||CONFIG.authMode!=='github-pat-v1')throw new Error('应用尚未发布。');
+ const before=generation,profile=await github('user',token);
+ if(profile.id!==CONFIG.ownerId||profile.login!==CONFIG.owner)throw new Error('此账号没有 log 访问权限。');
+ const repository=await github(repo,token);if(!repository.private||repository.id!==CONFIG.repositoryId||repository.owner?.id!==CONFIG.ownerId)throw new Error('必须使用本人拥有的私有仓库。');
+ const key=await readingKey(token),next={auth:'github-pat-v1',username:CONFIG.owner,token,key,expires:Date.now()+365*86400000,csrf:crypto.randomUUID()};
+ const files=await manifest(next);await verifyWrite(next);if(before!==generation)throw new Error('连接状态已变化，请重试。');
+ await db('put',next);if(before!==generation){await db('delete');throw new Error('连接状态已变化，请重试。');}
+ state=next;manifestPromise=Promise.resolve(files);generation++;return{username:next.username};
+}
+async function snapshotFile(active){
+ const file=await github(repo+'/contents/data/snapshot.bin?ref='+encodeURIComponent(CONFIG.branch),active.token);
+ if(!/^[a-f0-9]{40}$/.test(file.sha||'')||file.size>31*1024*1024)throw new Error('云端记录格式或大小无效，现有记录未覆盖。');
+ let bytes;
+ if(file.encoding==='base64'&&typeof file.content==='string')bytes=unb64(file.content.replace(/\s/g,''));
+ else if(file.encoding==='none')bytes=new Uint8Array(await github(repo+'/git/blobs/'+file.sha,active.token,{raw:true}));
+ else throw new Error('云端记录格式有误，现有记录未覆盖。');
+ return{sha:file.sha,bytes};
+}
+async function loadSnapshot(active){
+ const file=await snapshotFile(active);
+ return{sha:file.sha,snapshot:readCloudSnapshot(JSON.parse(decoder.decode(await decrypt(active.key,file.bytes,'snapshot'))))};
+}
+async function mergeAndSave(incoming,active,change){
+ readCloudSnapshot(incoming);
+ for(let attempt=0;attempt<4;attempt++){
+  const remote=await loadSnapshot(active),merged=mergeCloudSnapshots(incoming,remote.snapshot);
+  if(change!==generation||(await session())!==active)throw new Error('登录状态已变化，记录留在本机。');
+  if(canonical(merged)===canonical(remote.snapshot))return merged;
+  const clear=encoder.encode(JSON.stringify(merged));if(clear.length>30*1024*1024)throw new Error('记录已达单次同步容量，请先导出备份。');
+  const packet=await encrypt(active.key,clear,'snapshot');
+  if(change!==generation||(await session())!==active)throw new Error('登录状态已变化，记录留在本机。');
+  try{await github(repo+'/contents/data/snapshot.bin',active.token,{method:'PUT',body:{message:'log: merge records '+new Date().toISOString(),content:b64(packet),sha:remote.sha,branch:CONFIG.branch}});return merged;}
+  catch(error){if(error.status!==409&&error.status!==422)throw error;}
+ }
+ throw new Error('其他设备正在同步，本机记录已保留，请稍后重试。');
+}
+const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{...forcedHeaders,'Content-Type':'application/json; charset=utf-8'}});
+async function apiRequest(event,path){
+ const active=await session();if(!active)return json({error:'请重新登录。'},401);
+ const change=generation,request=event.request;
+ if(path==='api/status'&&request.method==='GET')return json({app:'log',csrf:active.csrf,username:active.username});
+ if(request.method==='POST'){
+  const source=event.clientId&&await self.clients.get(event.clientId);
+  if(!source?.url.startsWith(base.href)||request.headers.get('X-Log-CSRF')!==active.csrf||!/^application\/json\b/.test(request.headers.get('Content-Type')||''))return json({error:'请求无效。'},403);
+ }
+ try{
+  if(path==='api/logout'&&request.method==='POST'){await forget();return json({ok:true});}
+  if(path==='api/snapshot'&&request.method==='GET'){const remote=await loadSnapshot(active);if(change!==generation)return json({error:'请重新登录。'},401);return json(remote.snapshot);}
+  if(path==='api/snapshot'&&request.method==='POST'){
+   const size=Number(request.headers.get('Content-Length'));if(size>30*1024*1024)return json({error:'记录超过单次同步容量，请先导出备份。'},413);
+   const text=await request.text();if(encoder.encode(text).length>30*1024*1024)return json({error:'记录超过单次同步容量，请先导出备份。'},413);
+   const incoming=readCloudSnapshot(JSON.parse(text));
+   const job=writeQueue.then(()=>mergeAndSave(incoming,active,change));writeQueue=job.catch(()=>{});return json(await job);
+  }
+  return json({error:'未找到操作。'},404);
+ }catch(error){if(error.status===401){await forget();return json({error:'请重新登录。'},401);}return json({error:error.message||'同步未完成，本机记录已保留。'},502);}
+}
+async function openFile(active,path,change){
+ if(!manifestPromise)manifestPromise=manifest(active).catch(error=>{manifestPromise=null;throw error;});
+ const files=await manifestPromise,record=Object.hasOwn(files,path)?files[path]:null;if(!record)return null;
+ const [object,type,compressed]=record;if(!/^[a-f0-9]{64}$/.test(object))throw new Error('索引记录有误。');
+ const encrypted=await ciphertext('blobs/'+object.slice(0,2)+'/'+object+'.bin',active),bytes=await decrypt(active.key,encrypted,object),body=compressed?await inflate(bytes):bytes;
+ if(change!==generation||(await session())!==active)return null;
+ return new Response(body,{headers:{...forcedHeaders,'Content-Type':type,...(type.startsWith('text/html')?{'Content-Security-Policy':pagePolicy}:{})}});
+}
+async function loginPage(){const shell=await fetch(new URL('access/login.html',base),{cache:'no-store'});return new Response(shell.body,{headers:{...forcedHeaders,'Content-Type':'text/html; charset=utf-8'}});}
+async function handle(event,url){
+ let path;try{path=decodeURIComponent(url.pathname.slice(base.pathname.length));}catch{return new Response(null,{status:400});}
+ if(path.startsWith('api/'))return apiRequest(event,path);
+ if(event.request.method!=='GET')return new Response(null,{status:405});
+ const inactive=()=>event.request.mode==='navigate'?loginPage():new Response(null,{status:401,headers:forcedHeaders});
+ const active=await session();if(!active)return inactive();const change=generation;
+ if(!path||path.endsWith('/'))path+='index.html';
+ try{const file=await openFile(active,path,change);if(change!==generation)return inactive();return file||new Response(null,{status:404,headers:forcedHeaders});}
+ catch(error){if(error.status===401){await forget();return inactive();}return new Response('暂时无法打开，请联网后刷新。',{status:502,headers:{...forcedHeaders,'Content-Type':'text/plain;charset=utf-8'}});}
+}
+self.addEventListener('install',event=>event.waitUntil(self.skipWaiting()));
+self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
+self.addEventListener('message',event=>{
+ const port=event.ports[0];if(!port||!event.source?.url?.startsWith(base.href))return;
+ const message=event.data||{};
+ const job=message.type==='login'?signIn(message.token):message.type==='session'?session().then(active=>active?{username:active.username}:null):message.type==='logout'?forget():Promise.reject(new Error('请求无效。'));
+ event.waitUntil(job.then(result=>port.postMessage({ok:true,result}),error=>port.postMessage({ok:false,error:error.message})));
+});
+self.addEventListener('fetch',event=>{const url=new URL(event.request.url);if(url.origin!==base.origin||!url.pathname.startsWith(base.pathname)||publicFiles.has(url.pathname))return;event.respondWith(handle(event,url));});

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="light">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'">
+<meta name="theme-color" content="#f6f7fa"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="log">
+<link rel="icon" href="/log/icons/icon.svg" type="image/svg+xml"><link rel="icon" href="/log/favicon.ico"><link rel="apple-touch-icon" sizes="180x180" href="/log/apple-touch-icon.png"><link rel="manifest" href="/log/manifest.webmanifest">
+<title>log</title><link rel="stylesheet" href="/log/access/login.css">
+<script defer src="/log/access/config.js"></script><script defer src="/log/access/session.js"></script><script defer src="/log/access/login.js"></script>
+</head><body>
+<main class="login-card" aria-label="连接 log">
+<header class="identity"><img class="app-icon" src="/log/icons/icon.svg" width="88" height="88" alt=""><h1><img src="/log/access/wordmark.svg" alt="log" width="88" height="30"></h1></header>
+<button type="button" data-github-login disabled>连接 GitHub</button>
+<p role="status" aria-live="polite">正在连接…</p>
+</main>
+<dialog id="connect-dialog" aria-labelledby="connect-title"><form id="connect-form">
+<div class="dialog-heading"><h2 id="connect-title">连接 GitHub</h2><button type="button" class="close" aria-label="关闭">×</button></div>
+<label for="github-token">访问凭据</label><input id="github-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required placeholder="github_pat_…">
+<div class="connect-help"><a id="create-token" target="_blank" rel="noopener noreferrer">在 GitHub 创建凭据</a><p>仅选择 log-private，内容权限设为读写。</p></div>
+<button type="submit">连接</button><p id="connect-status" role="status" aria-live="polite"></p>
+</form></dialog>
+</body></html>
