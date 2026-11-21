@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "28a60bb59b433e1072f9ca3816e37a5cfac939d1", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "829eb0731aab6c4805f6d86613bd85c4fc515276", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -218,6 +218,22 @@ function mergeCloudSnapshots(local,remote){
   return cloudSnapshot(mergeEvents(local.events,remote.events),[...projects.values()].sort((a,b)=>(a.sourceLeaf||0)-(b.sourceLeaf||0)||a.id.localeCompare(b.id)),courses);
 }
 
+function readRunDay(value){
+ if(value?.schema!=='log-runs-v1'||!/^\d{4}-\d{2}-\d{2}$/.test(value.date||'')||!Array.isArray(value.runs)||value.runs.length>100000)throw new Error('运行日志格式无效');
+ const ids=new Set();
+ for(const r of value.runs){
+  if(typeof r.id!=='string'||ids.has(r.id)||typeof r.name!=='string'||r.name.length>200||!Array.isArray(r.segments)||!Array.isArray(r.usageEvents))throw new Error('任务日志格式无效');ids.add(r.id);
+  for(const s of r.segments)if(!Number.isFinite(Date.parse(s.start))||s.end&&!Number.isFinite(Date.parse(s.end)))throw new Error('运行时段无效');
+  for(const u of r.usageEvents)if(!Number.isFinite(Date.parse(u.at))||['inputTokens','outputTokens','cachedInputTokens','reasoningOutputTokens','totalTokens'].some(k=>u[k]!==undefined&&(!Number.isSafeInteger(u[k])||u[k]<0)))throw new Error('用量回报无效');
+ }
+ return value;
+}
+function runUsage(runs,date){
+ const start=Date.parse(date+'T00:00:00+08:00'),end=start+86400000,seen=new Set(),totals={inputTokens:0,outputTokens:0,cachedInputTokens:0,reasoningOutputTokens:0,totalTokens:0,reports:0};
+ for(const r of runs)for(const u of r.usageEvents||[]){const at=Date.parse(u.at),id=u.id||r.id+':'+u.at;if(at<start||at>=end||seen.has(id))continue;seen.add(id);totals.reports++;for(const k of Object.keys(totals))if(k!=='reports')totals[k]+=u[k]??(k==='totalTokens'?(u.inputTokens||0)+(u.outputTokens||0):0);}
+ return totals;
+}
+
 const base=new URL(CONFIG.basePath,self.location.origin),repo='repos/'+CONFIG.owner+'/'+CONFIG.repository;
 const publicFiles=new Set(["vault-worker.js", "manifest.webmanifest", "favicon.ico", "apple-touch-icon.png", "icons/icon.svg", "icons/wordmark.svg", "icons/favicon-32.png", "icons/apple-touch-icon-167.png", "icons/apple-touch-icon-152.png", "icons/app-192.png", "icons/app-512.png", "icons/maskable-512.png", "access/login.html", "access/github-callback.html", "access/login.css", "access/config.js", "access/session.js", "access/protect.js", "access/login.js", "access/wordmark.svg"].map(p=>new URL(p,base).pathname));
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
@@ -286,6 +302,7 @@ async function snapshotFile(active){
  if(file.encoding==='base64'&&typeof file.content==='string')bytes=unb64(file.content.replace(/\s/g,''));
  else if(file.encoding==='none')bytes=new Uint8Array(await github(repo+'/git/blobs/'+file.sha,active.token,{raw:true}));
  else throw new Error('云端记录格式有误，现有记录未覆盖。');
+ if(bytes.byteLength!==file.size)bytes=new Uint8Array(await github(repo+'/git/blobs/'+file.sha,active.token,{raw:true}));
  return{sha:file.sha,bytes};
 }
 async function loadSnapshot(active){
@@ -306,6 +323,24 @@ async function mergeAndSave(incoming,active,change){
  }
  throw new Error('其他设备正在同步，本机记录已保留，请稍后重试。');
 }
+async function loadRunFeed(active,name){
+ const cache=await caches.open('log-runs-ciphertext-v1:'+base.pathname),cacheKey=new URL('access/run-cipher/'+name,base).href;let bytes;
+ try{
+  const file=await github(repo+'/contents/data/runs/'+name+'.bin?ref='+encodeURIComponent(CONFIG.branch),active.token);
+  if(file.size>20*1024*1024)throw new Error('运行日志过大。');
+  if(file.encoding==='base64')bytes=unb64(file.content.replace(/\s/g,''));else if(file.encoding==='none')bytes=new Uint8Array(await github(repo+'/git/blobs/'+file.sha,active.token,{raw:true}));else throw new Error('运行日志格式无效。');
+  if(bytes.byteLength!==file.size)bytes=new Uint8Array(await github(repo+'/git/blobs/'+file.sha,active.token,{raw:true}));
+  // Authenticate before replacing the last usable encrypted cache.
+  const data=JSON.parse(decoder.decode(await inflate(await decrypt(active.key,bytes,'runs'))));
+  if(name==='index'){if(data.schema!=='log-run-index-v1'||!Array.isArray(data.dates))throw new Error('运行索引无效。');}else{readRunDay(data);if(data.date!==name)throw new Error('运行日志日期不匹配。');}
+  await cache.put(cacheKey,new Response(bytes));return data;
+ }catch(error){
+  if(error.status===401)throw error;
+  if(error.status===404)return null;
+  const saved=await cache.match(cacheKey);if(!saved)throw error;
+  return JSON.parse(decoder.decode(await inflate(await decrypt(active.key,await saved.arrayBuffer(),'runs'))));
+ }
+}
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{...forcedHeaders,'Content-Type':'application/json; charset=utf-8'}});
 async function apiRequest(event,path){
  const active=await session();if(!active)return json({error:'请重新登录。'},401);
@@ -317,6 +352,13 @@ async function apiRequest(event,path){
  }
  try{
   if(path==='api/logout'&&request.method==='POST'){await forget();return json({ok:true});}
+  if(request.method==='GET'&&(path==='api/runs'||path==='api/runs-index')){
+   const date=new URL(request.url).searchParams.get('date'),name=path==='api/runs-index'?'index':date;
+   if(name!=='index'){try{dayWindow(name);}catch{return json({error:'运行日期无效。'},400);}}
+   const data=await loadRunFeed(active,name);if(change!==generation)return json({error:'请重新登录。'},401);
+   return data?json(data):name==='index'?json({error:'尚无自动采集记录。'},404):json({schema:'log-runs-v1',date:name,timezone:'Asia/Shanghai',runs:[]});
+  }
+
   if(path==='api/snapshot'&&request.method==='GET'){const remote=await loadSnapshot(active);if(change!==generation)return json({error:'请重新登录。'},401);return json(remote.snapshot);}
   if(path==='api/snapshot'&&request.method==='POST'){
    const size=Number(request.headers.get('Content-Length'));if(size>30*1024*1024)return json({error:'记录超过单次同步容量，请先导出备份。'},413);
