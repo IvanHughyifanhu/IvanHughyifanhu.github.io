@@ -10,5 +10,5 @@
       worker.postMessage({type,...data},[channel.port2]);
     });
   }
-  window.LogMember={login:(token,expiresIn)=>call('login',{token,expiresIn}),session:()=>call('session'),logout:()=>call('logout')};
+  window.LogMember={login:(token,expiresIn)=>call('login',{token,expiresIn}),session:()=>call('session'),logout:()=>call('logout'),rememberLogin:pending=>call('login-pending-save',{pending}),pendingLogin:()=>call('login-pending-read'),clearLogin:state=>call('login-pending-clear',{state})};
 })();
