@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "829eb0731aab6c4805f6d86613bd85c4fc515276", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "490d98c716f14e509d08364465d65825fc75794a", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
