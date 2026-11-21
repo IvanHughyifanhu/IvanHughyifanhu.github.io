@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "44b7d87cddcfb177076b1d5d4dde538426c45530", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "28a60bb59b433e1072f9ca3816e37a5cfac939d1", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -201,6 +201,10 @@ function readCloudSnapshot(data){
   if(data?.schema!==CLOUD_SCHEMA)throw new Error('云端数据格式不兼容，未覆盖现有记录');
   return cloudSnapshot(data.events,data.projects,data.courses);
 }
+function sameCloudSnapshot(a,b){
+ const ordered=value=>({...value,events:[...value.events].sort((x,y)=>x.id.localeCompare(y.id)),projects:[...value.projects].sort((x,y)=>x.id.localeCompare(y.id)),courses:{...value.courses,courses:[...value.courses.courses].sort((x,y)=>x.id.localeCompare(y.id))}});
+ return canonical(ordered(a))===canonical(ordered(b));
+}
 function mergeCloudSnapshots(local,remote){
   readCloudSnapshot(local);readCloudSnapshot(remote);
   const projects=new Map(local.projects.map(p=>[p.id,p]));
@@ -219,10 +223,18 @@ const publicFiles=new Set(["vault-worker.js", "manifest.webmanifest", "favicon.i
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
 const forcedHeaders={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'};
 const pagePolicy="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'";
-const b64=bytes=>btoa(Array.from(new Uint8Array(bytes),n=>String.fromCharCode(n)).join(''));
+const b64=bytes=>{const value=new Uint8Array(bytes),parts=[];for(let at=0;at<value.length;at+=16384)parts.push(String.fromCharCode(...value.subarray(at,at+16384)));return btoa(parts.join(''));};
 const unb64=value=>Uint8Array.from(atob(value.replaceAll('-','+').replaceAll('_','/')),s=>s.charCodeAt(0));
 const dbPromise=new Promise((resolve,reject)=>{const r=indexedDB.open('log-github-access-v1',1);r.onupgradeneeded=()=>r.result.createObjectStore('session');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
-async function db(op,value){const database=await dbPromise;return new Promise((resolve,reject)=>{const tx=database.transaction('session',op==='get'?'readonly':'readwrite'),s=tx.objectStore('session');const q=op==='get'?s.get(base.href):op==='put'?s.put(value,base.href):s.delete(base.href);tx.oncomplete=()=>resolve(q.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}
+async function db(op,value,key=base.href){const database=await dbPromise;return new Promise((resolve,reject)=>{const tx=database.transaction('session',op==='get'?'readonly':'readwrite'),s=tx.objectStore('session');const q=op==='get'?s.get(key):op==='put'?s.put(value,key):s.delete(key);tx.oncomplete=()=>resolve(q.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}
+const pendingKey=base.href+'oauth-pending';
+async function pendingLogin(value,expectedState){
+ if(value===null){const saved=await db('get',null,pendingKey);if(!expectedState||saved?.state===expectedState)await db('delete',null,pendingKey);return null;}
+ if(value===undefined){const pending=await db('get',null,pendingKey);if(!pending)return null;if(!Number.isFinite(pending.at)||Date.now()-pending.at>600000||Date.now()<pending.at){await db('delete',null,pendingKey);return null;}return pending;}
+ if(!/^[A-Za-z0-9_-]{43}$/.test(value.state||'')||!/^[A-Za-z0-9_-]{43}$/.test(value.verifier||'')||!Number.isFinite(value.at)||Math.abs(Date.now()-value.at)>600000||!['normal','standalone'].includes(value.mode)||value.mode==='standalone'&&!/^[A-Za-z0-9_-]{43}$/.test(value.claim||'')||typeof value.returnTo!=='string'||value.returnTo.length>2048)throw new Error('登录接续格式无效。');
+ const returnTo=new URL(value.returnTo,base);if(returnTo.origin!==base.origin||!returnTo.pathname.startsWith(base.pathname))throw new Error('登录返回位置无效。');
+ await db('put',{state:value.state,verifier:value.verifier,at:value.at,mode:value.mode,claim:value.claim||null,returnTo:returnTo.href},pendingKey);return{saved:true};
+}
 let state,manifestPromise,generation=0,writeQueue=Promise.resolve();
 async function forget(){generation++;state=null;manifestPromise=null;await db('delete');for(const tab of await self.clients.matchAll({type:'window'}))if(tab.url.startsWith(base.href))tab.postMessage({type:'private-logout'});}
 async function session(){if(state===undefined){const before=generation,stored=await db('get');if(before===generation&&state===undefined)state=stored||null;}if(state&&(state.auth!=='github-oauth-v1'||state.expires<=Date.now()))await forget();return state;}
@@ -323,7 +335,14 @@ async function openFile(active,path,change){
  if(change!==generation||(await session())!==active)return null;
  return new Response(body,{headers:{...forcedHeaders,'Content-Type':type,...(type.startsWith('text/html')?{'Content-Security-Policy':pagePolicy}:{})}});
 }
-async function loginPage(){const shell=await fetch(new URL('access/login.html',base),{cache:'no-store'});return new Response(shell.body,{headers:{...forcedHeaders,'Content-Type':'text/html; charset=utf-8'}});}
+const publicCacheName='log-public-shell-v1:'+base.pathname;
+async function publicResource(request){
+ const key=new URL(request.url);key.search='';key.hash='';const cache=await caches.open(publicCacheName);
+ try{const response=await fetch(request);if(response.ok)await cache.put(key.href,response.clone());return response;}
+ catch(error){const saved=await cache.match(key.href);if(saved)return saved;throw error;}
+}
+async function warmPublicShell(){await Promise.allSettled([...publicFiles].filter(path=>/access\/|manifest|icon\.svg|apple-touch-icon\.png/.test(path)).map(path=>publicResource(new Request(new URL(path,base.origin),{cache:'reload',signal:AbortSignal.timeout(6000)}))));}
+async function loginPage(){const shell=await publicResource(new Request(new URL('access/login.html',base),{cache:'no-store'}));return new Response(shell.body,{headers:{...forcedHeaders,'Content-Type':'text/html; charset=utf-8'}});}
 async function handle(event,url){
  let path;try{path=decodeURIComponent(url.pathname.slice(base.pathname.length));}catch{return new Response(null,{status:400});}
  if(path.startsWith('api/'))return apiRequest(event,path);
@@ -334,12 +353,12 @@ async function handle(event,url){
  try{const file=await openFile(active,path,change);if(change!==generation)return inactive();return file||new Response(null,{status:404,headers:forcedHeaders});}
  catch(error){if(error.status===401){await forget();return inactive();}return new Response('暂时无法打开，请联网后刷新。',{status:502,headers:{...forcedHeaders,'Content-Type':'text/plain;charset=utf-8'}});}
 }
-self.addEventListener('install',event=>event.waitUntil(self.skipWaiting()));
+self.addEventListener('install',event=>event.waitUntil(Promise.all([self.skipWaiting(),warmPublicShell()])));
 self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
 self.addEventListener('message',event=>{
  const port=event.ports[0];if(!port||!event.source?.url?.startsWith(base.href))return;
  const message=event.data||{};
- const job=message.type==='login'?signIn(message.token,message.expiresIn):message.type==='session'?session().then(active=>active?{username:active.username}:null):message.type==='logout'?forget():Promise.reject(new Error('请求无效。'));
+ const job=message.type==='login'?signIn(message.token,message.expiresIn):message.type==='session'?session().then(active=>active?{username:active.username}:null):message.type==='logout'?forget():message.type==='login-pending-save'?pendingLogin(message.pending):message.type==='login-pending-read'?pendingLogin():message.type==='login-pending-clear'?pendingLogin(null,message.state):Promise.reject(new Error('请求无效。'));
  event.waitUntil(job.then(result=>port.postMessage({ok:true,result}),error=>port.postMessage({ok:false,error:error.message})));
 });
-self.addEventListener('fetch',event=>{const url=new URL(event.request.url);if(url.origin!==base.origin||!url.pathname.startsWith(base.pathname)||publicFiles.has(url.pathname))return;event.respondWith(handle(event,url));});
+self.addEventListener('fetch',event=>{const url=new URL(event.request.url);if(url.origin!==base.origin||!url.pathname.startsWith(base.pathname))return;if(publicFiles.has(url.pathname)){if(event.request.method==='GET')event.respondWith(publicResource(event.request));return;}event.respondWith(handle(event,url));});

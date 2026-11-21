@@ -1,10 +1,10 @@
 {
-  "id": "./",
+  "id": "/log/",
   "name": "log",
   "short_name": "log",
   "lang": "zh-CN",
-  "start_url": "./?source=homescreen",
-  "scope": "./",
+  "start_url": "/log/?source=homescreen#overview",
+  "scope": "/log/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#ffffff",
