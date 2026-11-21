@@ -10,5 +10,5 @@
       worker.postMessage({type,...data},[channel.port2]);
     });
   }
-  window.LogMember={login:token=>call('login',{token}),session:()=>call('session'),logout:()=>call('logout')};
+  window.LogMember={login:(token,expiresIn)=>call('login',{token,expiresIn}),session:()=>call('session'),logout:()=>call('logout')};
 })();
