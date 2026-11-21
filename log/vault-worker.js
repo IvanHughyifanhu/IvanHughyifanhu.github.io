@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "490d98c716f14e509d08364465d65825fc75794a", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "3a974a3b3e1c09349379d56fa60989fc81fe4e78", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -245,6 +245,11 @@ function mergeRunParts(date,parts){
  return{schema:'log-runs-v1',date,timezone:'Asia/Shanghai',runs};
 }
 
+async function validateMonthlyExport(value){
+ if(value?.schema!=='log-monthly-export-v1'||!/^\d{4}-(0[1-9]|1[0-2])$/.test(value.month||'')||!/^[a-f0-9]{64}$/.test(value.sourceHash||'')||value.source?.schema!=='log-monthly-source-v1'||value.source.month!==value.month||!Array.isArray(value.source.events)||!Array.isArray(value.source.days)||!Array.isArray(value.source.projects)||!Number.isSafeInteger(value.pages)||value.pages<2||value.pages%2||value.pages>2000||value.logicalPages!==value.pages*2||typeof value.pdfBase64!=='string'||value.pdfBase64.length>28*1024*1024||!/^JVBERi0[A-Za-z0-9+/=\r\n]*$/.test(value.pdfBase64))throw new Error('月度归档格式无效');
+ const text=stableEventJSON(value.source),hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))).map(x=>x.toString(16).padStart(2,'0')).join('');if(hash!==value.sourceHash)throw new Error('月度来源校验未通过');
+ return value;
+}
 const base=new URL(CONFIG.basePath,self.location.origin),repo='repos/'+CONFIG.owner+'/'+CONFIG.repository;
 const publicFiles=new Set(["vault-worker.js", "manifest.webmanifest", "favicon.ico", "apple-touch-icon.png", "icons/icon.svg", "icons/wordmark.svg", "icons/favicon-32.png", "icons/apple-touch-icon-167.png", "icons/apple-touch-icon-152.png", "icons/app-192.png", "icons/app-512.png", "icons/maskable-512.png", "access/login.html", "access/github-callback.html", "access/login.css", "access/config.js", "access/session.js", "access/protect.js", "access/login.js", "access/wordmark.svg"].map(p=>new URL(p,base).pathname));
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
@@ -354,6 +359,15 @@ async function loadRunFeed(active,name,version){
   return JSON.parse(decoder.decode(await inflate(await decrypt(active.key,await saved.arrayBuffer(),'runs'))));
  }
 }
+async function saveMonthlyExport(value,active,change){
+ const item=await validateMonthlyExport(value),name='data/exports/'+item.month+'/'+item.sourceHash+'.bin',aad='monthly:'+item.month+':'+item.sourceHash;
+ try{await github(repo+'/contents/'+name+'?ref='+encodeURIComponent(CONFIG.branch),active.token);return {saved:true,sourceHash:item.sourceHash};}catch(error){if(error.status!==404)throw error;}
+ const bytes=encoder.encode(JSON.stringify(item)),compressed=await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer(),packet=await encrypt(active.key,compressed,aad);
+ if(change!==generation||(await session())!==active)throw new Error('请重新登录');
+ try{await github(repo+'/contents/'+name,active.token,{method:'PUT',body:{message:'log: archive '+item.month,content:b64(packet),branch:CONFIG.branch}});}
+ catch(error){if(![409,422].includes(error.status))throw error;await github(repo+'/contents/'+name+'?ref='+encodeURIComponent(CONFIG.branch),active.token);}
+ return {saved:true,sourceHash:item.sourceHash};
+}
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{...forcedHeaders,'Content-Type':'application/json; charset=utf-8'}});
 async function apiRequest(event,path){
  const active=await session();if(!active)return json({error:'请重新登录。'},401);
@@ -372,6 +386,11 @@ async function apiRequest(event,path){
    return data?json(data):name==='index'?json({error:'尚无自动采集记录。'},404):json({schema:'log-runs-v1',date:name,timezone:'Asia/Shanghai',runs:[]});
   }
 
+  if(path==='api/monthly-export'&&request.method==='POST'){
+   if(Number(request.headers.get('Content-Length'))>30*1024*1024)return json({error:'月度归档超过单次容量'},413);
+   const text=await request.text();if(encoder.encode(text).length>30*1024*1024)return json({error:'月度归档超过单次容量'},413);
+   const incoming=JSON.parse(text),job=writeQueue.then(()=>saveMonthlyExport(incoming,active,change));writeQueue=job.catch(()=>{});return json(await job);
+  }
   if(path==='api/snapshot'&&request.method==='GET'){const remote=await loadSnapshot(active);if(change!==generation)return json({error:'请重新登录。'},401);return json(remote.snapshot);}
   if(path==='api/snapshot'&&request.method==='POST'){
    const size=Number(request.headers.get('Content-Length'));if(size>30*1024*1024)return json({error:'记录超过单次同步容量，请先导出备份。'},413);
