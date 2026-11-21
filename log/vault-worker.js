@@ -234,6 +234,17 @@ function runUsage(runs,date){
  return totals;
 }
 
+function mergeRunParts(date,parts){
+ const byid=new Map();
+ for(const part of parts){if(part.schema!=='log-runs-v1'||part.date!==date)throw new Error('运行分段日期不符');for(const r of part.runs){
+  const old=byid.get(r.id);if(!old){byid.set(r.id,JSON.parse(JSON.stringify(r)));continue;}
+  old.segments.push(...r.segments);const usage=new Map(old.usageEvents.map(u=>[u.id,u]));for(const u of r.usageEvents)usage.set(u.id,u);old.usageEvents=[...usage.values()];
+  if(Date.parse(r.lastHeartbeat)>=Date.parse(old.lastHeartbeat)){old.lastHeartbeat=r.lastHeartbeat;old.state=r.state;old.model=r.model;old.name=r.name;}
+ }}
+ const runs=[...byid.values()];for(const r of runs){r.segments.sort((a,b)=>a.start.localeCompare(b.start));r.usageEvents.sort((a,b)=>a.at.localeCompare(b.at));}
+ return{schema:'log-runs-v1',date,timezone:'Asia/Shanghai',runs};
+}
+
 const base=new URL(CONFIG.basePath,self.location.origin),repo='repos/'+CONFIG.owner+'/'+CONFIG.repository;
 const publicFiles=new Set(["vault-worker.js", "manifest.webmanifest", "favicon.ico", "apple-touch-icon.png", "icons/icon.svg", "icons/wordmark.svg", "icons/favicon-32.png", "icons/apple-touch-icon-167.png", "icons/apple-touch-icon-152.png", "icons/app-192.png", "icons/app-512.png", "icons/maskable-512.png", "access/login.html", "access/github-callback.html", "access/login.css", "access/config.js", "access/session.js", "access/protect.js", "access/login.js", "access/wordmark.svg"].map(p=>new URL(p,base).pathname));
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
@@ -323,17 +334,19 @@ async function mergeAndSave(incoming,active,change){
  }
  throw new Error('其他设备正在同步，本机记录已保留，请稍后重试。');
 }
-async function loadRunFeed(active,name){
+async function loadRunFeed(active,name,version){
  const cache=await caches.open('log-runs-ciphertext-v1:'+base.pathname),cacheKey=new URL('access/run-cipher/'+name,base).href;let bytes;
+ const cached=await cache.match(cacheKey);if(version&&cached?.headers.get('X-Log-Version')===version)return JSON.parse(decoder.decode(await inflate(await decrypt(active.key,await cached.arrayBuffer(),'runs'))));
  try{
   const file=await github(repo+'/contents/data/runs/'+name+'.bin?ref='+encodeURIComponent(CONFIG.branch),active.token);
   if(file.size>20*1024*1024)throw new Error('运行日志过大。');
+  const previous=await cache.match(cacheKey);if(previous?.headers.get('X-Log-Sha')===file.sha)return JSON.parse(decoder.decode(await inflate(await decrypt(active.key,await previous.arrayBuffer(),'runs'))));
   if(file.encoding==='base64')bytes=unb64(file.content.replace(/\s/g,''));else if(file.encoding==='none')bytes=new Uint8Array(await github(repo+'/git/blobs/'+file.sha,active.token,{raw:true}));else throw new Error('运行日志格式无效。');
   if(bytes.byteLength!==file.size)bytes=new Uint8Array(await github(repo+'/git/blobs/'+file.sha,active.token,{raw:true}));
   // Authenticate before replacing the last usable encrypted cache.
   const data=JSON.parse(decoder.decode(await inflate(await decrypt(active.key,bytes,'runs'))));
-  if(name==='index'){if(data.schema!=='log-run-index-v1'||!Array.isArray(data.dates))throw new Error('运行索引无效。');}else{readRunDay(data);if(data.date!==name)throw new Error('运行日志日期不匹配。');}
-  await cache.put(cacheKey,new Response(bytes));return data;
+  if(name==='index'){if(data.schema!=='log-run-index-v1'||!Array.isArray(data.dates))throw new Error('运行索引无效。');}else if(data.schema==='log-run-day-v1'){if(data.date!==name||!Array.isArray(data.parts)||data.parts.length>24||data.parts.some(p=>!new RegExp('^'+name+'-(0[0-9]|1[0-9]|2[0-3])$').test(p)))throw new Error('运行分段索引无效。');}else{readRunDay(data);if(data.date!==name.slice(0,10))throw new Error('运行日志日期不匹配。');}
+  await cache.put(cacheKey,new Response(bytes,{headers:{'X-Log-Sha':file.sha,...(version?{'X-Log-Version':version}:{})}}));return data;
  }catch(error){
   if(error.status===401)throw error;
   if(error.status===404)return null;
@@ -355,7 +368,7 @@ async function apiRequest(event,path){
   if(request.method==='GET'&&(path==='api/runs'||path==='api/runs-index')){
    const date=new URL(request.url).searchParams.get('date'),name=path==='api/runs-index'?'index':date;
    if(name!=='index'){try{dayWindow(name);}catch{return json({error:'运行日期无效。'},400);}}
-   const data=await loadRunFeed(active,name);if(change!==generation)return json({error:'请重新登录。'},401);
+   let data=await loadRunFeed(active,name);if(data?.schema==='log-run-day-v1'){const parts=[];for(let at=0;at<data.parts.length;at+=4){const batch=await Promise.all(data.parts.slice(at,at+4).map(p=>loadRunFeed(active,p,data.versions?.[p])));if(batch.some(p=>!p))throw new Error('运行分段尚未收齐，请稍后刷新。');parts.push(...batch);}data=readRunDay(mergeRunParts(name,parts));}if(change!==generation)return json({error:'请重新登录。'},401);
    return data?json(data):name==='index'?json({error:'尚无自动采集记录。'},404):json({schema:'log-runs-v1',date:name,timezone:'Asia/Shanghai',runs:[]});
   }
 
