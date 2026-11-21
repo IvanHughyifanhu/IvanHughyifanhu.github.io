@@ -12,7 +12,9 @@
  function openApp(address){if(opening)return;opening=true;clearTimeout(pollTimer);const target=destination(address),url=new URL(target);if(url.pathname===location.pathname&&url.search===location.search){history.replaceState(null,'',target);location.reload();}else location.replace(target);}
  async function activate(){
   if(!navigator.serviceWorker||!crypto.subtle)throw new Error('请通过 HTTPS 或本机预览地址打开。');
-  const worker=new URL('vault-worker.js?auth=github-oauth-v2',base);
+  // A changed app revision must activate before the login message is sent.
+  // Comparing only a fixed script URL can reuse a worker with older data rules.
+  const worker=new URL('vault-worker.js',base);worker.search=new URLSearchParams({auth:'github-oauth-v3',revision:config.revision});
   await navigator.serviceWorker.register(worker,{scope:base.pathname,updateViaCache:'none'});
   const controlled=()=>navigator.serviceWorker.controller?.scriptURL===worker.href;if(controlled())return;
   await new Promise((resolve,reject)=>{const abort=new AbortController();const check=()=>{if(controlled()){clearTimeout(timer);abort.abort();resolve();}};const timer=setTimeout(()=>{abort.abort();reject(new Error('连接启动超时，请刷新。'));},12000);navigator.serviceWorker.addEventListener('controllerchange',check,{signal:abort.signal});check();});

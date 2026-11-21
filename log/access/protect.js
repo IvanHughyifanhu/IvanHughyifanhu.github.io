@@ -10,5 +10,8 @@
  navigator.serviceWorker?.addEventListener('message',event=>{if(event.data?.type==='private-logout')void login().catch(()=>{});});
  addEventListener('pagehide',()=>{body.hidden=true;});
  addEventListener('pageshow',async()=>{try{if(await window.LogMember.session())body.hidden=false;else await login();}catch{void login().catch(()=>{});}});
- navigator.serviceWorker?.register(new URL('vault-worker.js?auth=github-oauth-v2',base),{scope:base.pathname,updateViaCache:'none'}).catch(()=>{});
+ const current=navigator.serviceWorker?.controller?.scriptURL;
+ let worker=new URL('vault-worker.js?auth=github-oauth-v3',base);
+ if(current){const active=new URL(current);if(active.origin===base.origin&&active.pathname===worker.pathname)worker=active;}
+ navigator.serviceWorker?.register(worker,{scope:base.pathname,updateViaCache:'none'}).catch(()=>{});
 })();
