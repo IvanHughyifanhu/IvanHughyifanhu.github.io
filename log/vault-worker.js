@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "44b7d87cddcfb177076b1d5d4dde538426c45530", "authMode": "github-pat-v1", "repositoryId": 1465610041};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "44b7d87cddcfb177076b1d5d4dde538426c45530", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -215,7 +215,7 @@ function mergeCloudSnapshots(local,remote){
 }
 
 const base=new URL(CONFIG.basePath,self.location.origin),repo='repos/'+CONFIG.owner+'/'+CONFIG.repository;
-const publicFiles=new Set(["vault-worker.js", "manifest.webmanifest", "favicon.ico", "apple-touch-icon.png", "icons/icon.svg", "icons/wordmark.svg", "icons/favicon-32.png", "icons/apple-touch-icon-167.png", "icons/apple-touch-icon-152.png", "icons/app-192.png", "icons/app-512.png", "icons/maskable-512.png", "access/login.html", "access/login.css", "access/config.js", "access/session.js", "access/protect.js", "access/login.js", "access/wordmark.svg"].map(p=>new URL(p,base).pathname));
+const publicFiles=new Set(["vault-worker.js", "manifest.webmanifest", "favicon.ico", "apple-touch-icon.png", "icons/icon.svg", "icons/wordmark.svg", "icons/favicon-32.png", "icons/apple-touch-icon-167.png", "icons/apple-touch-icon-152.png", "icons/app-192.png", "icons/app-512.png", "icons/maskable-512.png", "access/login.html", "access/github-callback.html", "access/login.css", "access/config.js", "access/session.js", "access/protect.js", "access/login.js", "access/wordmark.svg"].map(p=>new URL(p,base).pathname));
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
 const forcedHeaders={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'};
 const pagePolicy="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'";
@@ -225,10 +225,10 @@ const dbPromise=new Promise((resolve,reject)=>{const r=indexedDB.open('log-githu
 async function db(op,value){const database=await dbPromise;return new Promise((resolve,reject)=>{const tx=database.transaction('session',op==='get'?'readonly':'readwrite'),s=tx.objectStore('session');const q=op==='get'?s.get(base.href):op==='put'?s.put(value,base.href):s.delete(base.href);tx.oncomplete=()=>resolve(q.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}
 let state,manifestPromise,generation=0,writeQueue=Promise.resolve();
 async function forget(){generation++;state=null;manifestPromise=null;await db('delete');for(const tab of await self.clients.matchAll({type:'window'}))if(tab.url.startsWith(base.href))tab.postMessage({type:'private-logout'});}
-async function session(){if(state===undefined){const before=generation,stored=await db('get');if(before===generation&&state===undefined)state=stored||null;}if(state&&(state.auth!=='github-pat-v1'||state.expires<=Date.now()))await forget();return state;}
+async function session(){if(state===undefined){const before=generation,stored=await db('get');if(before===generation&&state===undefined)state=stored||null;}if(state&&(state.auth!=='github-oauth-v1'||state.expires<=Date.now()))await forget();return state;}
 async function github(path,token,{raw=false,method='GET',body}={}){
  const response=await fetch('https://api.github.com/'+path,{method,headers:{Authorization:'Bearer '+token,Accept:raw?'application/vnd.github.raw+json':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(20000)});
- if(!response.ok){const err=new Error(response.status===401?'GitHub 访问凭据已失效，请重新连接。':response.status===403||response.status===404?'无法访问 log 私有仓库，请检查访问凭据的仓库和读写权限。':'GitHub 暂时无法连接，本机记录已保留。');err.status=response.status;throw err;}
+ if(!response.ok){const err=new Error(response.status===401?'GitHub 登录已失效，请重新登录。':response.status===403||response.status===404?'log 私有仓库尚未授权读写，请检查 GitHub App 的安装范围。':'GitHub 暂时无法连接，本机记录已保留。');err.status=response.status;throw err;}
  return raw?response.arrayBuffer():response.json();
 }
 const vaultPath=name=>repo+'/contents/'+name+'?ref='+encodeURIComponent(CONFIG.revision);
@@ -256,13 +256,13 @@ async function verifyWrite(active){
  }
  throw new Error('其他设备正在同步，请稍后连接。');
 }
-async function signIn(token){
- if(typeof token!=='string'||!/^github_pat_[A-Za-z0-9_]{40,255}$/.test(token))throw new Error('请使用仅限 log-private 的细粒度访问凭据。');
- if(!CONFIG.revision||CONFIG.authMode!=='github-pat-v1')throw new Error('应用尚未发布。');
+async function signIn(token,expiresIn){
+ if(typeof token!=='string'||!/^ghu_[A-Za-z0-9_]{24,255}$/.test(token)||!Number.isSafeInteger(expiresIn)||expiresIn<60||expiresIn>28800)throw new Error('GitHub 登录授权无效，请重新登录。');
+ if(!CONFIG.revision||CONFIG.authMode!=='github-oauth-v1')throw new Error('应用尚未发布。');
  const before=generation,profile=await github('user',token);
  if(profile.id!==CONFIG.ownerId||profile.login!==CONFIG.owner)throw new Error('此账号没有 log 访问权限。');
  const repository=await github(repo,token);if(!repository.private||repository.id!==CONFIG.repositoryId||repository.owner?.id!==CONFIG.ownerId)throw new Error('必须使用本人拥有的私有仓库。');
- const key=await readingKey(token),next={auth:'github-pat-v1',username:CONFIG.owner,token,key,expires:Date.now()+365*86400000,csrf:crypto.randomUUID()};
+ const key=await readingKey(token),next={auth:'github-oauth-v1',username:CONFIG.owner,token,key,expires:Date.now()+(expiresIn-30)*1000,csrf:crypto.randomUUID()};
  const files=await manifest(next);await verifyWrite(next);if(before!==generation)throw new Error('连接状态已变化，请重试。');
  await db('put',next);if(before!==generation){await db('delete');throw new Error('连接状态已变化，请重试。');}
  state=next;manifestPromise=Promise.resolve(files);generation++;return{username:next.username};
@@ -339,7 +339,7 @@ self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
 self.addEventListener('message',event=>{
  const port=event.ports[0];if(!port||!event.source?.url?.startsWith(base.href))return;
  const message=event.data||{};
- const job=message.type==='login'?signIn(message.token):message.type==='session'?session().then(active=>active?{username:active.username}:null):message.type==='logout'?forget():Promise.reject(new Error('请求无效。'));
+ const job=message.type==='login'?signIn(message.token,message.expiresIn):message.type==='session'?session().then(active=>active?{username:active.username}:null):message.type==='logout'?forget():Promise.reject(new Error('请求无效。'));
  event.waitUntil(job.then(result=>port.postMessage({ok:true,result}),error=>port.postMessage({ok:false,error:error.message})));
 });
 self.addEventListener('fetch',event=>{const url=new URL(event.request.url);if(url.origin!==base.origin||!url.pathname.startsWith(base.pathname)||publicFiles.has(url.pathname))return;event.respondWith(handle(event,url));});
