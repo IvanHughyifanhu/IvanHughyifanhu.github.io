@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "fcd92b532dc5e0d5363a464a8d4d96e8bf2b7a18", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "6a384934647a17d998f9f87fa5eb48b04c8c605c", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -305,7 +305,7 @@ function readRunDay(value){
 }
 function runUsage(runs,date){
  const start=Date.parse(date+'T00:00:00+08:00'),end=start+86400000,seen=new Set(),totals={inputTokens:0,outputTokens:0,cachedInputTokens:0,reasoningOutputTokens:0,totalTokens:0,reports:0};
- for(const r of runs){const all=r.usageEvents||[],reported=all.filter(u=>!String(u.basis||'').includes('_estimate'));for(const u of r.usageMode==='reported'||reported.length?reported:all){const at=Date.parse(u.at),id=u.id||r.id+':'+u.at;if(at<start||at>=end||seen.has(id))continue;seen.add(id);totals.reports++;for(const k of Object.keys(totals))if(k!=='reports')totals[k]+=u[k]??(k==='totalTokens'?(u.inputTokens||0)+(u.outputTokens||0):0);}}
+ for(const r of runs){const all=r.usageEvents||[],reported=all.filter(u=>!String(u.basis||'').includes('_estimate'));const residual=r.usageMode==='reported_with_residual'?all.filter(u=>u.basis==='counter_residual_estimate_v1'):[];for(const u of r.usageMode==='reported'||r.usageMode==='reported_with_residual'||reported.length?[...reported,...residual]:all){const at=Date.parse(u.at),id=u.id||r.id+':'+u.at;if(at<start||at>=end||seen.has(id))continue;seen.add(id);totals.reports++;for(const k of Object.keys(totals))if(k!=='reports')totals[k]+=u[k]??(k==='totalTokens'?(u.inputTokens||0)+(u.outputTokens||0):0);}}
  return totals;
 }
 
@@ -313,7 +313,7 @@ function mergeRunParts(date,parts){
  const byid=new Map();
  for(const part of parts){if(part.schema!=='log-runs-v1'||part.date!==date)throw new Error('运行分段日期不符');for(const r of part.runs){
   const old=byid.get(r.id);if(!old){byid.set(r.id,JSON.parse(JSON.stringify(r)));continue;}
-  old.segments.push(...r.segments);const usage=new Map(old.usageEvents.map(u=>[u.id,u]));for(const u of r.usageEvents)usage.set(u.id,u);old.usageEvents=[...usage.values()];if(r.usageMode==='reported')old.usageMode='reported';
+  old.segments.push(...r.segments);const usage=new Map(old.usageEvents.map(u=>[u.id,u]));for(const u of r.usageEvents)usage.set(u.id,u);old.usageEvents=[...usage.values()];if(r.usageMode==='reported_with_residual')old.usageMode='reported_with_residual';else if(r.usageMode==='reported'&&old.usageMode!=='reported_with_residual')old.usageMode='reported';
   if(Date.parse(r.lastHeartbeat)>=Date.parse(old.lastHeartbeat)){old.lastHeartbeat=r.lastHeartbeat;old.state=r.state;old.model=r.model;old.name=r.name;}
  }}
  const runs=[...byid.values()];for(const r of runs){r.segments.sort((a,b)=>a.start.localeCompare(b.start));r.usageEvents.sort((a,b)=>a.at.localeCompare(b.at));}
