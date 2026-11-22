@@ -5,7 +5,7 @@
     if(!worker)return Promise.reject(new Error('访问服务尚未就绪，请刷新。'));
     return new Promise((resolve,reject)=>{
       const channel=new MessageChannel();
-      const timer=setTimeout(()=>{channel.port1.close();reject(new Error('连接超时，请重试。'));},30000);
+      const timer=setTimeout(()=>{channel.port1.close();reject(new Error('连接超时，请重试。'));},type==='login'?120000:30000);
       channel.port1.onmessage=event=>{clearTimeout(timer);channel.port1.close();event.data?.ok?resolve(event.data.result):reject(new Error(event.data?.error||'连接失败，请重试。'));};
       worker.postMessage({type,...data},[channel.port2]);
     });
