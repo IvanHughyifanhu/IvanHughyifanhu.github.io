@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "1f15dc1fa79d89b7a31ccc58db77846eedc6377e", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "292805abfa301db6b0240b9d0b4a54ea107974da", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -183,12 +183,13 @@ function calendarTimeLabel(calendar={}){
   return calendar.time?calendar.time+(calendar.endTime?'–'+calendar.endTime:''):calendar.kind==='deadline'?'ddl':'全天';
 }
 // All views, including the day page, consume this same read model.
-function buildCalendarItems(config,events,start,end){
+function buildCalendarItems(config,events,start,end,projectId=''){
+  if(typeof projectId!=='string')projectId=projectId?.projectId||'';
   const [a]=dayWindow(start),[,b]=dayWindow(end);
   if(b<=a||b-a>367*DAY)throw new Error('查看范围需在一年以内');
   const items=[];
   for(const record of materialize(events))for(const head of record.heads){
-    const d=head.data;if(d.archived||d.date<start||d.date>end)continue;
+    const d=head.data;if(d.archived||d.date<start||d.date>end||!recordInProject(d,projectId))continue;
     const kind=record.conflict?'conflict':d.type==='calendar'?(d.calendar?.kind==='deadline'?'deadline':'calendar'):d.type==='artifact'?'note':d.type;
     const time=d.type==='calendar'?(d.calendar?.time||''):'';
     items.push({id:`record:${record.id}:${head.id}`,recordId:record.id,date:d.date,title:d.text,kind,finance:d.finance,source:'record',recordType:d.type==='artifact'?'note':d.type,projectId:d.projectId,projectIds:recordProjectIds(d),time,timeLabel:d.type==='calendar'?calendarTimeLabel(d.calendar):kind==='action'?'行动':kind==='finance'?'财务':kind==='conflict'?'待合并':'备忘',location:d.calendar?.location||'',createdAt:head.at,conflict:record.conflict});
