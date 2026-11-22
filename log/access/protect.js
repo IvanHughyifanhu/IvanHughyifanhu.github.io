@@ -13,5 +13,22 @@
  const current=navigator.serviceWorker?.controller?.scriptURL;
  let worker=new URL('vault-worker.js?auth=github-oauth-v3',base);
  if(current){const active=new URL(current);if(active.origin===base.origin&&active.pathname===worker.pathname)worker=active;}
- navigator.serviceWorker?.register(worker,{scope:base.pathname,updateViaCache:'none'}).catch(()=>{});
+ if(!current)navigator.serviceWorker?.register(worker,{scope:base.pathname,updateViaCache:'none'}).catch(()=>{});
+ // Existing signed-in pages must discover releases too, without clearing their
+ // session, IndexedDB or unfinished drafts. A revision-specific worker avoids
+ // an older cached worker URL continuing to serve a previous application.
+ async function refreshRelease(){
+  if(!navigator.serviceWorker||navigator.onLine===false)return;
+  const url=new URL('access/config.js',base);url.searchParams.set('check',String(Date.now()));
+  const response=await fetch(url,{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(12000)});if(!response.ok)return;
+  const match=(await response.text()).trim().match(/^window\.LOG_ACCESS=Object\.freeze\((\{[\s\S]*\})\);?$/);if(!match)return;
+  const config=JSON.parse(match[1]);if(config.ownerId!==199221372||config.repository!=='log-private'||config.origin!==base.origin||config.basePath!==base.pathname||!/^[a-f0-9]{40}$/.test(config.revision||''))return;
+  const next=new URL('vault-worker.js',base);next.search=new URLSearchParams({auth:'github-oauth-v3',revision:config.revision});
+  if(navigator.serviceWorker.controller?.scriptURL===next.href)return;
+  await navigator.serviceWorker.register(next,{scope:base.pathname,updateViaCache:'none'});
+  const controlled=()=>navigator.serviceWorker.controller?.scriptURL===next.href;
+  if(!controlled())await new Promise((resolve,reject)=>{const abort=new AbortController(),timer=setTimeout(()=>{abort.abort();reject(new Error('Update not ready'));},12000);const check=()=>{if(controlled()){clearTimeout(timer);abort.abort();resolve();}};navigator.serviceWorker.addEventListener('controllerchange',check,{signal:abort.signal});check();});
+  if(!controlled()||redirecting)return;await window.LogPrepareForLogin?.();if(!redirecting)location.reload();
+ }
+ void refreshRelease().catch(()=>{});
 })();
