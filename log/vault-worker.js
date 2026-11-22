@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "bf02feb32d1fccb5ed2358acc3c81944a30b15a2", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "c062308bf684ac94853eccf5b4f16fb55969a19e", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -62,7 +62,7 @@ function validateEvents(events) {
     dayWindow(e.data.date);
     if(e.data.calendar!==undefined){
       const c=e.data.calendar;
-      if(!c||!['event','deadline'].includes(c.kind)||typeof c.time!=='string'||(c.time&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(c.time)))throw new Error('日程时间格式无效');
+      if(!c||!['event','deadline'].includes(c.kind)||typeof c.time!=='string'||(c.time&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(c.time))||c.endTime!==undefined&&(typeof c.endTime!=='string'||c.endTime&&(!/^([01]\d|2[0-3]):[0-5]\d$/.test(c.endTime)||!c.time||c.endTime<=c.time))||c.location!==undefined&&(typeof c.location!=='string'||c.location.length>300))throw new Error('日程时间或地点格式无效');
     }
     ids.set(e.id,e);
   }
@@ -141,22 +141,29 @@ function overviewDateRange(month,scale='month',projects=[]){
   }
   return {start,end};
 }
+function selectionRange(date,unit='month'){
+  dayWindow(date);
+  if(unit==='day')return {start:date,end:date};
+  if(!['month','quarter','year'].includes(unit))throw new Error('请选择日、月、季度或年');
+  return overviewDateRange(date.slice(0,7),unit);
+}
+function shiftSelection(date,unit,delta){
+  const range=selectionRange(date,unit);
+  return unit==='day'?dateOffset(date,delta):monthOffset(range.start.slice(0,7),delta*(unit==='quarter'?3:unit==='year'?12:1))+'-01';
+}
+function calendarTimeLabel(calendar={}){
+  return calendar.time?calendar.time+(calendar.endTime?'–'+calendar.endTime:''):calendar.kind==='deadline'?'ddl':'全天';
+}
 // All views, including the day page, consume this same read model.
-function buildCalendarItems(config,events,start,end,{fixed=true}={}){
+function buildCalendarItems(config,events,start,end){
   const [a]=dayWindow(start),[,b]=dayWindow(end);
   if(b<=a||b-a>367*DAY)throw new Error('查看范围需在一年以内');
   const items=[];
-  if(fixed)for(let date=start;date<=end;date=dateOffset(date,1)){
-    for(const c of coursesForDate(config,date))items.push({id:`course:${c.id}:${date}`,date,title:c.display_name,kind:'calendar',source:'course',time:c.start,timeLabel:`${c.start}–${c.end}`,location:c.location,projectId:'',courseId:c.id});
-    const [t]=dayWindow(date),wd=(new Date(t+28800000).getUTCDay()+6)%7;
-    if(wd===3||wd===4)items.push({id:`work:${date}`,date,title:'档案馆',kind:'calendar',source:'fixed_work',time:'',timeLabel:'上午、下午',location:'',projectId:''});
-    if(date==='2026-11-09')items.push({id:'exam:japanese:2026-11-09',date,title:'日语期中考试',kind:'calendar',source:'fixed_event',time:'',timeLabel:'当天',location:'',projectId:''});
-  }
   for(const record of materialize(events))for(const head of record.heads){
     const d=head.data;if(d.archived||d.date<start||d.date>end)continue;
     const kind=record.conflict?'conflict':d.type==='calendar'?(d.calendar?.kind==='deadline'?'deadline':'calendar'):d.type==='artifact'?'note':d.type;
     const time=d.type==='calendar'?(d.calendar?.time||''):'';
-    items.push({id:`record:${record.id}:${head.id}`,recordId:record.id,date:d.date,title:d.text,kind,source:'record',recordType:d.type==='artifact'?'note':d.type,projectId:d.projectId,time,timeLabel:time||(kind==='deadline'?'ddl':kind==='calendar'?'全天':kind==='action'?'行动':kind==='conflict'?'待合并':'备忘'),location:'',createdAt:head.at,conflict:record.conflict});
+    items.push({id:`record:${record.id}:${head.id}`,recordId:record.id,date:d.date,title:d.text,kind,source:'record',recordType:d.type==='artifact'?'note':d.type,projectId:d.projectId,time,timeLabel:d.type==='calendar'?calendarTimeLabel(d.calendar):kind==='action'?'行动':kind==='conflict'?'待合并':'备忘',location:d.calendar?.location||'',createdAt:head.at,conflict:record.conflict});
   }
   return items.sort((x,y)=>x.date.localeCompare(y.date)||(x.time||'').localeCompare(y.time||'')||(x.createdAt||'').localeCompare(y.createdAt||'')||x.id.localeCompare(y.id));
 }
@@ -278,7 +285,7 @@ const base=new URL(CONFIG.basePath,self.location.origin),repo='repos/'+CONFIG.ow
 const publicFiles=new Set(["vault-worker.js", "manifest.webmanifest", "favicon.ico", "apple-touch-icon.png", "icons/icon.svg", "icons/wordmark.svg", "icons/favicon-32.png", "icons/apple-touch-icon-167.png", "icons/apple-touch-icon-152.png", "icons/app-192.png", "icons/app-512.png", "icons/maskable-512.png", "access/login.html", "access/github-callback.html", "access/login.css", "access/config.js", "access/session.js", "access/protect.js", "access/login.js", "access/wordmark.svg"].map(p=>new URL(p,base).pathname));
 const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
 const forcedHeaders={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'};
-const pagePolicy="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'";
+const pagePolicy="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-src blob:; frame-ancestors 'none'";
 const b64=bytes=>{const value=new Uint8Array(bytes),parts=[];for(let at=0;at<value.length;at+=16384)parts.push(String.fromCharCode(...value.subarray(at,at+16384)));return btoa(parts.join(''));};
 const unb64=value=>Uint8Array.from(atob(value.replaceAll('-','+').replaceAll('_','/')),s=>s.charCodeAt(0));
 const dbPromise=new Promise((resolve,reject)=>{const r=indexedDB.open('log-github-access-v1',1);r.onupgradeneeded=()=>r.result.createObjectStore('session');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
