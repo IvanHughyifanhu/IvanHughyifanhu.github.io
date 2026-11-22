@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "3f6aef784228e5b3b5b82c315bcf64f49361be8b", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "1f4ce6991cbca15abf3d8e5a5864fd0a1ea8167b", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -20,7 +20,8 @@ function matchesRecordType(record,type){return !type||record.heads.some(h=>(h.da
 function recordProjectIds(data={}){
   return [...new Set((Array.isArray(data.projectIds)?data.projectIds:[data.projectId]).filter(id=>typeof id==='string'&&id))];
 }
-function recordInProject(data,id){return !id||recordProjectIds(data).includes(id);}
+function selectedProjectIds(selection){return [...new Set((Array.isArray(selection)?selection:typeof selection==='string'?[selection]:selection?.projectIds||[selection?.projectId]).filter(id=>typeof id==='string'&&id))];}
+function recordInProject(data,selection){const ids=selectedProjectIds(selection);return !ids.length||ids.some(id=>recordProjectIds(data).includes(id));}
 function recordMatchesRange(record,range){return record.heads.some(h=>(record.conflict||!h.data.archived)&&h.data.date>=range.start&&h.data.date<=range.end);}
 function withRecordProjects(data,ids){const projectIds=[...new Set(ids.filter(id=>typeof id==='string'&&id))];return {...data,projectId:projectIds[0]||'',projectIds};}
 function summarizeFinance(events,date,projectId=''){
@@ -185,7 +186,7 @@ function calendarTimeLabel(calendar={}){
 }
 // All views, including the day page, consume this same read model.
 function buildCalendarItems(config,events,start,end,projectId=''){
-  if(typeof projectId!=='string')projectId=projectId?.projectId||'';
+  projectId=selectedProjectIds(projectId);
   const [a]=dayWindow(start),[,b]=dayWindow(end);
   if(b<=a||b-a>367*DAY)throw new Error('查看范围需在一年以内');
   const items=[];
@@ -220,6 +221,10 @@ function projectChoiceLabel(p,full=true){return `（${projectTypeLabel(p)}）`+(
 const projectCollator=new Intl.Collator('zh-CN-u-co-pinyin',{numeric:true,sensitivity:'base',ignorePunctuation:true});
 function projectInitial(title){const first=[...title].find(c=>/[\p{L}\p{N}]/u.test(c))||'';if(/^[a-z0-9]$/i.test(first))return first.toUpperCase();const boundaries=[...'阿芭擦搭蛾发噶哈击喀垃妈拿哦啪期然撒塌挖昔压匝'],letters='ABCDEFGHJKLMNOPQRSTWXYZ';for(let i=boundaries.length-1;i>=0;i--)if(projectCollator.compare(first,boundaries[i])>=0)return letters[i];return first;}
 function sortProjects(list){const order=Object.keys(PROJECT_TYPES);return [...list].sort((a,b)=>{const ai=order.indexOf(a.type),bi=order.indexOf(b.type),an=a.headings.join(''),bn=b.headings.join('');return (ai<0?6:ai)-(bi<0?6:bi)||projectInitial(an).localeCompare(projectInitial(bn),'en')||projectCollator.compare(an,bn)||a.id.localeCompare(b.id);});}
+function projectPickerChoices(projects,selection,mode='record'){
+ const ids=selectedProjectIds(selection),selected=new Set(ids),entries=sortProjects(projects.filter(p=>mode==='deleted'||!p.archived||mode==='record'&&selected.has(p.id)||mode==='overview'&&projectHasConflict(p)));
+ return {entries,ids:mode==='record'?ids:ids.filter(id=>entries.some(p=>p.id===id))};
+}
 function projectMatchesRange(p,range,records=[]){
  if(range.start==='0001-01-01'&&range.end==='9999-12-31')return true;
  if(p.period)return p.period.start<=range.end&&p.period.end>=range.start;
