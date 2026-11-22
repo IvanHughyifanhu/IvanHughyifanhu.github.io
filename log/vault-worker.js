@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "6a384934647a17d998f9f87fa5eb48b04c8c605c", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "fc0892c520c8341e3d15b3741252ab4525af3638", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -216,7 +216,7 @@ function projectGanttRows(projects,events,range){
 
 const PROJECT_TYPES=Object.freeze({life:'生活立德',brand:'做事立功：品牌打造',clients:'做事立功：客户运营',products:'做事立功：产服销售',investment:'做事立功：理财投资',voice:'发声立言'});
 function projectTypeLabel(p){return PROJECT_TYPES[p?.type]||'未设置类型';}
-function projectChoiceLabel(p,full=false){return `（${projectTypeLabel(p)}）`+(full?p.headings.join(' ／ '):p.headings[0]);}
+function projectChoiceLabel(p,full=true){return `（${projectTypeLabel(p)}）`+(full?p.headings.join(' ／ '):p.headings[0]);}
 const projectCollator=new Intl.Collator('zh-CN-u-co-pinyin',{numeric:true,sensitivity:'base',ignorePunctuation:true});
 function projectInitial(title){const first=[...title].find(c=>/[\p{L}\p{N}]/u.test(c))||'';if(/^[a-z0-9]$/i.test(first))return first.toUpperCase();const boundaries=[...'阿芭擦搭蛾发噶哈击喀垃妈拿哦啪期然撒塌挖昔压匝'],letters='ABCDEFGHJKLMNOPQRSTWXYZ';for(let i=boundaries.length-1;i>=0;i--)if(projectCollator.compare(first,boundaries[i])>=0)return letters[i];return first;}
 function sortProjects(list){const order=Object.keys(PROJECT_TYPES);return [...list].sort((a,b)=>{const ai=order.indexOf(a.type),bi=order.indexOf(b.type),an=a.headings.join(''),bn=b.headings.join('');return (ai<0?6:ai)-(bi<0?6:bi)||projectInitial(an).localeCompare(projectInitial(bn),'en')||projectCollator.compare(an,bn)||a.id.localeCompare(b.id);});}
