@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "292805abfa301db6b0240b9d0b4a54ea107974da", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "2ca676496f3e2f8a55c948c10cb4e6a9e878dc14", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -21,6 +21,7 @@ function recordProjectIds(data={}){
   return [...new Set((Array.isArray(data.projectIds)?data.projectIds:[data.projectId]).filter(id=>typeof id==='string'&&id))];
 }
 function recordInProject(data,id){return !id||recordProjectIds(data).includes(id);}
+function recordMatchesRange(record,range){return record.heads.some(h=>(record.conflict||!h.data.archived)&&h.data.date>=range.start&&h.data.date<=range.end);}
 function withRecordProjects(data,ids){const projectIds=[...new Set(ids.filter(id=>typeof id==='string'&&id))];return {...data,projectId:projectIds[0]||'',projectIds};}
 function summarizeFinance(events,date,projectId=''){
   const range=typeof date==='string'?{start:date,end:date}:date;dayWindow(range.start);dayWindow(range.end);let incomeMinor=0,expenseMinor=0;
@@ -213,9 +214,22 @@ function projectGanttRows(projects,events,range){
   });
 }
 
-function projectData(p){return {headings:[...p.headings],period:p.period?{start:p.period.start,end:p.period.end}:null,archived:!!p.archived};}
+const PROJECT_TYPES=Object.freeze({life:'生活立德',brand:'做事立功：品牌打造',clients:'做事立功：客户运营',products:'做事立功：产服销售',investment:'做事立功：理财投资',voice:'发声立言'});
+function projectTypeLabel(p){return PROJECT_TYPES[p?.type]||'未设置类型';}
+function projectChoiceLabel(p,full=false){return `（${projectTypeLabel(p)}）`+(full?p.headings.join(' ／ '):p.headings[0]);}
+const projectCollator=new Intl.Collator('zh-CN-u-co-pinyin',{numeric:true,sensitivity:'base',ignorePunctuation:true});
+function projectInitial(title){const first=[...title].find(c=>/[\p{L}\p{N}]/u.test(c))||'';if(/^[a-z0-9]$/i.test(first))return first.toUpperCase();const boundaries=[...'阿芭擦搭蛾发噶哈击喀垃妈拿哦啪期然撒塌挖昔压匝'],letters='ABCDEFGHJKLMNOPQRSTWXYZ';for(let i=boundaries.length-1;i>=0;i--)if(projectCollator.compare(first,boundaries[i])>=0)return letters[i];return first;}
+function sortProjects(list){const order=Object.keys(PROJECT_TYPES);return [...list].sort((a,b)=>{const ai=order.indexOf(a.type),bi=order.indexOf(b.type),an=a.headings.join(''),bn=b.headings.join('');return (ai<0?6:ai)-(bi<0?6:bi)||projectInitial(an).localeCompare(projectInitial(bn),'en')||projectCollator.compare(an,bn)||a.id.localeCompare(b.id);});}
+function projectMatchesRange(p,range,records=[]){
+ if(range.start==='0001-01-01'&&range.end==='9999-12-31')return true;
+ if(p.period)return p.period.start<=range.end&&p.period.end>=range.start;
+ const createdAt=Date.parse(p.createdAt),created=Number.isFinite(createdAt)?new Date(createdAt+28800000).toISOString().slice(0,10):'';
+ return !!(created&&created>=range.start&&created<=range.end)||records.some(r=>r.heads.some(h=>!h.data.archived&&recordInProject(h.data,p.id)&&h.data.date>=range.start&&h.data.date<=range.end));
+}
+function projectData(p){return {headings:[...p.headings],period:p.period?{start:p.period.start,end:p.period.end}:null,archived:!!p.archived,...(p.type!==undefined?{type:p.type}:{})};}
 function validateProjectData(data){
  if(!data||!Array.isArray(data.headings)||!data.headings.length||data.headings.length>8||data.headings.some(h=>typeof h!=='string'||!h.trim()||h.length>300)||typeof data.archived!=='boolean')throw new Error('项目名称无效');
+ if(data.type!==undefined&&data.type!==''&&!Object.hasOwn(PROJECT_TYPES,data.type))throw new Error('项目类型无效');
  if(data.period!==null){dayWindow(data.period?.start);dayWindow(data.period?.end);if(data.period.end<data.period.start)throw new Error('结束日期早于开始日期');}
  return data;
 }
@@ -230,10 +244,10 @@ function validateProject(p){
  const visiting=new Set(),done=new Set();function visit(id){if(!ids.has(id))throw new Error('项目历史缺少前序');if(visiting.has(id))throw new Error('项目历史形成循环');if(done.has(id))return;visiting.add(id);ids.get(id).parents.forEach(visit);visiting.delete(id);done.add(id);}for(const id of ids.keys())visit(id);
  if(stableEventJSON(projectData(p))!==stableEventJSON(projectedProjectData(p)))throw new Error('项目当前内容与历史不一致');return p;
 }
-function projectWithLog(template,base,events){const temp={...template,logProject:{version:1,base,events:[...events].sort((a,b)=>a.id.localeCompare(b.id))}},d=projectedProjectData(temp),date=s=>s.split('-').map(Number).join('.');return {...temp,headings:[...d.headings],period:d.period?{...d.period,display_lines:[date(d.period.start),'–',date(d.period.end)]}:null,archived:d.archived};}
+function projectWithLog(template,base,events){const {type:oldType,...rest}=template,temp={...rest,logProject:{version:1,base,events:[...events].sort((a,b)=>a.id.localeCompare(b.id))}},d=projectedProjectData(temp),date=s=>s.split('-').map(Number).join('.');return {...temp,headings:[...d.headings],period:d.period?{...d.period,display_lines:[date(d.period.start),'–',date(d.period.end)]}:null,archived:d.archived,...(d.type!==undefined?{type:d.type}:{})};}
 function mergeProjectCatalog(local,remote){
  const map=new Map();for(const p of [...local,...remote]){validateProject(p);const old=map.get(p.id);if(!old){map.set(p.id,p);continue;}if(stableEventJSON(old)===stableEventJSON(p))continue;
-  const strip=p=>Object.fromEntries(Object.entries(p).filter(([k])=>!['headings','period','archived','logProject'].includes(k))),a=old.logProject?.base||projectData(old),b=p.logProject?.base||projectData(p);
+  const strip=p=>Object.fromEntries(Object.entries(p).filter(([k])=>!['headings','period','archived','type','logProject'].includes(k))),a=old.logProject?.base||projectData(old),b=p.logProject?.base||projectData(p);
   if(stableEventJSON(strip(old))!==stableEventJSON(strip(p))||stableEventJSON(a)!==stableEventJSON(b))throw new Error('同一项目的原始名册不同，两个版本均已保留');
   const events=new Map();for(const e of [...old.logProject?.events||[],...p.logProject?.events||[]]){if(events.has(e.id)&&stableEventJSON(events.get(e.id))!==stableEventJSON(e))throw new Error('项目修改编号冲突，未覆盖');events.set(e.id,e);}const merged=projectWithLog(old,a,[...events.values()]);validateProject(merged);map.set(p.id,merged);
  }

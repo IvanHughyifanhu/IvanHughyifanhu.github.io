@@ -3,7 +3,7 @@
   "name": "log",
   "short_name": "log",
   "lang": "zh-CN",
-  "start_url": "/log/?source=homescreen#overview",
+  "start_url": "/log/?source=homescreen#today",
   "scope": "/log/",
   "display": "standalone",
   "background_color": "#ffffff",

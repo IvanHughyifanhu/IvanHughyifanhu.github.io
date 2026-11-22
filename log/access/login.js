@@ -8,7 +8,7 @@
  const digest=async value=>base64url(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))));
  const standalone=()=>navigator.standalone===true||window.matchMedia?.('(display-mode: standalone)').matches===true;
  let opening=false,working=false,pollTimer=null,externalReturn=false,waitingHandoff=false;
- function destination(address=location.href){try{const u=new URL(address,base);if(u.origin!==base.origin||!u.pathname.startsWith(base.pathname)||u.pathname.startsWith(base.pathname+'access/'))return new URL('#overview',base).href;u.searchParams.delete('sign-in');u.searchParams.delete('code');u.searchParams.delete('state');return new URL(u.pathname+u.search+(u.hash||'#overview'),base).href;}catch{return new URL('#overview',base).href;}}
+ function destination(address=location.href){try{const u=new URL(address,base);if(u.origin!==base.origin||!u.pathname.startsWith(base.pathname)||u.pathname.startsWith(base.pathname+'access/'))return new URL('#today',base).href;u.searchParams.delete('sign-in');u.searchParams.delete('code');u.searchParams.delete('state');return new URL(u.pathname+u.search+(u.hash||'#today'),base).href;}catch{return new URL('#today',base).href;}}
  function openApp(address){if(opening)return;opening=true;clearTimeout(pollTimer);const target=destination(address),url=new URL(target);if(url.pathname===location.pathname&&url.search===location.search){history.replaceState(null,'',target);location.reload();}else location.replace(target);}
  async function activate(){
   if(!navigator.serviceWorker||!crypto.subtle)throw new Error('请通过 HTTPS 或本机预览地址打开。');
