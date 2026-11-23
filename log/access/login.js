@@ -36,8 +36,8 @@
  }
  async function relay(data){
   const response=await fetch(config.relay,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(25000),body:JSON.stringify(data)});
-  let result;try{result=await response.json();}catch{throw new Error('登录服务暂时无法连接，请稍后重试。');}
-  if(!response.ok){const error=new Error(result.error||'GitHub 登录未完成。');error.status=response.status;throw error;}
+  let result;try{result=await response.json();}catch{throw new Error('登入服务暂时无法连接，请稍后重试。');}
+  if(!response.ok){const error=new Error(result.error||'GitHub 登入未完成。');error.status=response.status;throw error;}
   return result;
  }
  async function finish(code,value){
@@ -49,7 +49,7 @@
   openApp(value.returnTo);
  }
  async function begin(){
-  if(!configured)throw new Error('GitHub 登录服务尚未接通。');
+  if(!configured)throw new Error('GitHub 登入服务尚未接通。');
   const old=await pending();if(old?.mode==='standalone')void relay({action:'clear',state:old.state,claim:old.claim}).catch(()=>{});
   const verifier=random(),state=random(),challenge=await digest(verifier),mode=standalone()?'standalone':'normal';
   const value={state,verifier,at:Date.now(),returnTo:destination(),mode};
@@ -58,47 +58,47 @@
   const url=new URL('https://github.com/login/oauth/authorize');url.search=new URLSearchParams({client_id:config.clientId,redirect_uri:callback.href,state,code_challenge:challenge,code_challenge_method:'S256',login:config.owner,allow_signup:'false'});
   location.assign(url.href);
  }
- function showExternalReturn(){externalReturn=true;status.textContent='登录确认已收到，请返回主屏幕上的 log。';button.textContent='回到 log';button.disabled=false;try{window.opener?.postMessage({type:'log-login-returned'},base.origin);}catch{}}
+ function showExternalReturn(){externalReturn=true;status.textContent='登入确认已收到，请返回主屏幕上的 log。';button.textContent='回到 log';button.disabled=false;try{window.opener?.postMessage({type:'log-login-returned'},base.origin);}catch{}}
  async function redeem(){
   const query=new URLSearchParams(location.search),state=query.get('state'),code=query.get('code');history.replaceState(null,'',callback.pathname);
   await activate();const saved=await remembered(),value=valid(saved)&&saved.state===state?saved:null;
-  if(saved&&!value){if(!valid(saved))await clear(saved);throw new Error('本次登录已失效，请重新登录。');}
+  if(saved&&!value){if(!valid(saved))await clear(saved);throw new Error('本次登入已失效，请重新登入。');}
   if(!value){
    if(/^[A-Za-z0-9_-]{43}$/.test(state||'')&&(/^[A-Za-z0-9_-]{10,160}$/.test(code||'')||query.get('error')==='access_denied')){
     await relay({action:'complete',state,...(query.has('error')?{error:'access_denied'}:{code})});showExternalReturn();return;
    }
-   throw new Error('本次登录已失效，请重新登录。');
+   throw new Error('本次登入已失效，请重新登入。');
   }
-  if(query.has('error')){await clear(value);throw new Error('GitHub 登录已取消。');}
-  if(!/^[A-Za-z0-9_-]{10,160}$/.test(code||'')){await clear(value);throw new Error('本次登录已失效，请重新登录。');}
-  status.textContent='正在核对 GitHub 登录…';
+  if(query.has('error')){await clear(value);throw new Error('GitHub 登入已取消。');}
+  if(!/^[A-Za-z0-9_-]{10,160}$/.test(code||'')){await clear(value);throw new Error('本次登入已失效，请重新登入。');}
+  status.textContent='正在核对 GitHub 登入…';
   try{await finish(code,value);}catch(error){if(error.status===400||error.status===401||error.status===403)await clear(value);throw error;}
  }
  async function resume(){
   if(working||opening||externalReturn)return;working=true;clearTimeout(pollTimer);
   try{
-   const value=await pending();if(!value||value.mode!=='standalone'){if(waitingHandoff){waitingHandoff=false;throw new Error('本次登录已失效，请重新登录。');}return;}
+   const value=await pending();if(!value||value.mode!=='standalone'){if(waitingHandoff){waitingHandoff=false;throw new Error('本次登入已失效，请重新登入。');}return;}
    waitingHandoff=true;
-   status.textContent='正在接续 GitHub 登录…';button.disabled=true;
+   status.textContent='正在接续 GitHub 登入…';button.disabled=true;
    const result=await relay({action:'claim',state:value.state,claim:value.claim});
-   if(result.cancelled){await clear(value);throw new Error('GitHub 登录已取消。');}
+   if(result.cancelled){await clear(value);throw new Error('GitHub 登入已取消。');}
    if(result.code){await finish(result.code,value);return;}
-   status.textContent='正在等待 GitHub 登录，请完成后回到 log。';button.textContent='重新登录';button.disabled=false;
+   status.textContent='正在等待 GitHub 登入，请完成后回到 log。';button.textContent='重新登入';button.disabled=false;
    if(!document.hidden)pollTimer=setTimeout(()=>void resume(),2500);
   }catch(error){fail(error);}finally{working=false;}
  }
  async function start(){
-  if(!configured)throw new Error('GitHub 登录服务尚未接通。');
+  if(!configured)throw new Error('GitHub 登入服务尚未接通。');
   if(location.pathname===callback.pathname&&location.search){working=true;try{await redeem();}finally{working=false;}return;}
   await activate();if(await window.LogMember.session()){await clear();openApp();return;}
   const value=await pending();if(value?.mode==='standalone'){await resume();return;}
   status.textContent='';button.disabled=false;
  }
  button.addEventListener('click',()=>{
-  if(externalReturn){try{window.close();}catch{}status.textContent='请点主屏幕上的 log，登录会自动接续。';return;}
+  if(externalReturn){try{window.close();}catch{}status.textContent='请点主屏幕上的 log，登入会自动接续。';return;}
   clearTimeout(pollTimer);button.disabled=true;status.textContent='正在打开 GitHub…';begin().catch(fail);
  });
  document.addEventListener('visibilitychange',()=>{if(!document.hidden)void resume();});window.addEventListener('pageshow',()=>void resume());window.addEventListener('online',()=>void resume());
- function fail(error){if(opening)return;status.textContent=error.message||'暂时无法登录，请重试。';button.textContent='使用 GitHub 登录';button.disabled=!configured;}
+ function fail(error){if(opening)return;status.textContent=(error.message||'暂时无法登入，请重试。').replaceAll('登录','登入');button.textContent='使用 GitHub 登入';button.disabled=!configured;}
  start().catch(fail);
 })();

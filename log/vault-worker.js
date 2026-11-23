@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "0c9da6d2af4fa300a298834ba91b1f0f6942501e", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "fd29e7ecab27e5e5f652916d6066a95d64a36e26", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -343,8 +343,8 @@ const pendingKey=base.href+'oauth-pending';
 async function pendingLogin(value,expectedState){
  if(value===null){const saved=await db('get',null,pendingKey);if(!expectedState||saved?.state===expectedState)await db('delete',null,pendingKey);return null;}
  if(value===undefined){const pending=await db('get',null,pendingKey);if(!pending)return null;if(!Number.isFinite(pending.at)||Date.now()-pending.at>600000||Date.now()<pending.at){await db('delete',null,pendingKey);return null;}return pending;}
- if(!/^[A-Za-z0-9_-]{43}$/.test(value.state||'')||!/^[A-Za-z0-9_-]{43}$/.test(value.verifier||'')||!Number.isFinite(value.at)||Math.abs(Date.now()-value.at)>600000||!['normal','standalone'].includes(value.mode)||value.mode==='standalone'&&!/^[A-Za-z0-9_-]{43}$/.test(value.claim||'')||typeof value.returnTo!=='string'||value.returnTo.length>2048)throw new Error('登录接续格式无效。');
- const returnTo=new URL(value.returnTo,base);if(returnTo.origin!==base.origin||!returnTo.pathname.startsWith(base.pathname))throw new Error('登录返回位置无效。');
+ if(!/^[A-Za-z0-9_-]{43}$/.test(value.state||'')||!/^[A-Za-z0-9_-]{43}$/.test(value.verifier||'')||!Number.isFinite(value.at)||Math.abs(Date.now()-value.at)>600000||!['normal','standalone'].includes(value.mode)||value.mode==='standalone'&&!/^[A-Za-z0-9_-]{43}$/.test(value.claim||'')||typeof value.returnTo!=='string'||value.returnTo.length>2048)throw new Error('登入接续格式无效。');
+ const returnTo=new URL(value.returnTo,base);if(returnTo.origin!==base.origin||!returnTo.pathname.startsWith(base.pathname))throw new Error('登入返回位置无效。');
  await db('put',{state:value.state,verifier:value.verifier,at:value.at,mode:value.mode,claim:value.claim||null,returnTo:returnTo.href},pendingKey);return{saved:true};
 }
 let state,manifestPromise,generation=0,writeQueue=Promise.resolve();
@@ -352,7 +352,7 @@ async function forget(){generation++;state=null;manifestPromise=null;await db('d
 async function session(){if(state===undefined){const before=generation,stored=await db('get');if(before===generation&&state===undefined)state=stored||null;}if(state&&(state.auth!=='github-oauth-v1'||state.expires<=Date.now()))await forget();return state;}
 async function github(path,token,{raw=false,method='GET',body}={}){
  const response=await fetch('https://api.github.com/'+path,{method,headers:{Authorization:'Bearer '+token,Accept:raw?'application/vnd.github.raw+json':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(20000)});
- if(!response.ok){const err=new Error(response.status===401?'GitHub 登录已失效，请重新登录。':response.status===403||response.status===404?'log 私有仓库尚未授权读写，请检查 GitHub App 的安装范围。':'GitHub 暂时无法连接，本机记录已保留。');err.status=response.status;throw err;}
+ if(!response.ok){const err=new Error(response.status===401?'GitHub 登入已失效，请重新登入。':response.status===403||response.status===404?'log 私有仓库尚未授权读写，请检查 GitHub App 的安装范围。':'GitHub 暂时无法连接，本机记录已保留。');err.status=response.status;throw err;}
  return raw?response.arrayBuffer():response.json();
 }
 const vaultPath=name=>repo+'/contents/'+name+'?ref='+encodeURIComponent(CONFIG.revision);
@@ -381,7 +381,7 @@ async function verifyWrite(active){
  throw new Error('其他设备正在同步，请稍后连接。');
 }
 async function signIn(token,expiresIn){
- if(typeof token!=='string'||!/^ghu_[A-Za-z0-9_]{24,255}$/.test(token)||!Number.isSafeInteger(expiresIn)||expiresIn<60||expiresIn>28800)throw new Error('GitHub 登录授权无效，请重新登录。');
+ if(typeof token!=='string'||!/^ghu_[A-Za-z0-9_]{24,255}$/.test(token)||!Number.isSafeInteger(expiresIn)||expiresIn<60||expiresIn>28800)throw new Error('GitHub 登入授权无效，请重新登入。');
  if(!CONFIG.revision||CONFIG.authMode!=='github-oauth-v1')throw new Error('应用尚未发布。');
  const before=generation,profile=await github('user',token);
  if(profile.id!==CONFIG.ownerId||profile.login!==CONFIG.owner)throw new Error('此账号没有 log 访问权限。');
@@ -409,11 +409,11 @@ async function mergeAndSave(incoming,active,change){
  readCloudSnapshot(incoming);
  for(let attempt=0;attempt<4;attempt++){
   const remote=await loadSnapshot(active),merged=mergeCloudSnapshots(incoming,remote.snapshot);
-  if(change!==generation||(await session())!==active)throw new Error('登录状态已变化，记录留在本机。');
+  if(change!==generation||(await session())!==active)throw new Error('登入状态已变化，记录留在本机。');
   if(canonical(merged)===canonical(remote.snapshot))return merged;
   const clear=encoder.encode(JSON.stringify(merged));if(clear.length>30*1024*1024)throw new Error('记录已达单次同步容量，请先导出备份。');
   const packet=await encrypt(active.key,clear,'snapshot');
-  if(change!==generation||(await session())!==active)throw new Error('登录状态已变化，记录留在本机。');
+  if(change!==generation||(await session())!==active)throw new Error('登入状态已变化，记录留在本机。');
   try{await github(repo+'/contents/data/snapshot.bin',active.token,{method:'PUT',body:{message:'log: merge records '+new Date().toISOString(),content:b64(packet),sha:remote.sha,branch:CONFIG.branch}});return merged;}
   catch(error){if(error.status!==409&&error.status!==422)throw error;}
  }
@@ -443,14 +443,14 @@ async function saveMonthlyExport(value,active,change){
  const item=await validateMonthlyExport(value),name='data/exports/'+item.month+'/'+item.sourceHash+'.bin',aad='monthly:'+item.month+':'+item.sourceHash;
  try{await github(repo+'/contents/'+name+'?ref='+encodeURIComponent(CONFIG.branch),active.token);return {saved:true,sourceHash:item.sourceHash};}catch(error){if(error.status!==404)throw error;}
  const bytes=encoder.encode(JSON.stringify(item)),compressed=await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer(),packet=await encrypt(active.key,compressed,aad);
- if(change!==generation||(await session())!==active)throw new Error('请重新登录');
+ if(change!==generation||(await session())!==active)throw new Error('请重新登入');
  try{await github(repo+'/contents/'+name,active.token,{method:'PUT',body:{message:'log: archive '+item.month,content:b64(packet),branch:CONFIG.branch}});}
  catch(error){if(![409,422].includes(error.status))throw error;await github(repo+'/contents/'+name+'?ref='+encodeURIComponent(CONFIG.branch),active.token);}
  return {saved:true,sourceHash:item.sourceHash};
 }
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{...forcedHeaders,'Content-Type':'application/json; charset=utf-8'}});
 async function apiRequest(event,path){
- const active=await session();if(!active)return json({error:'请重新登录。'},401);
+ const active=await session();if(!active)return json({error:'请重新登入。'},401);
  const change=generation,request=event.request;
  if(path==='api/status'&&request.method==='GET')return json({app:'log',csrf:active.csrf,username:active.username});
  if(request.method==='POST'){
@@ -462,7 +462,7 @@ async function apiRequest(event,path){
   if(request.method==='GET'&&(path==='api/runs'||path==='api/runs-index')){
    const date=new URL(request.url).searchParams.get('date'),name=path==='api/runs-index'?'index':date;
    if(name!=='index'){try{dayWindow(name);}catch{return json({error:'运行日期无效。'},400);}}
-   let data=await loadRunFeed(active,name);if(data?.schema==='log-run-day-v1'){const parts=[];for(let at=0;at<data.parts.length;at+=4){const batch=await Promise.all(data.parts.slice(at,at+4).map(p=>loadRunFeed(active,p,data.versions?.[p])));if(batch.some(p=>!p))throw new Error('运行分段尚未收齐，请稍后刷新。');parts.push(...batch);}data=readRunDay(mergeRunParts(name,parts));}if(change!==generation)return json({error:'请重新登录。'},401);
+   let data=await loadRunFeed(active,name);if(data?.schema==='log-run-day-v1'){const parts=[];for(let at=0;at<data.parts.length;at+=4){const batch=await Promise.all(data.parts.slice(at,at+4).map(p=>loadRunFeed(active,p,data.versions?.[p])));if(batch.some(p=>!p))throw new Error('运行分段尚未收齐，请稍后刷新。');parts.push(...batch);}data=readRunDay(mergeRunParts(name,parts));}if(change!==generation)return json({error:'请重新登入。'},401);
    return data?json(data):name==='index'?json({error:'尚无自动采集记录。'},404):json({schema:'log-runs-v1',date:name,timezone:'Asia/Shanghai',runs:[]});
   }
 
@@ -471,7 +471,7 @@ async function apiRequest(event,path){
    const text=await request.text();if(encoder.encode(text).length>30*1024*1024)return json({error:'月度存档超过单次容量'},413);
    const incoming=JSON.parse(text),job=writeQueue.then(()=>saveMonthlyExport(incoming,active,change));writeQueue=job.catch(()=>{});return json(await job);
   }
-  if(path==='api/snapshot'&&request.method==='GET'){const remote=await loadSnapshot(active);if(change!==generation)return json({error:'请重新登录。'},401);return json(remote.snapshot);}
+  if(path==='api/snapshot'&&request.method==='GET'){const remote=await loadSnapshot(active);if(change!==generation)return json({error:'请重新登入。'},401);return json(remote.snapshot);}
   if(path==='api/snapshot'&&request.method==='POST'){
    const size=Number(request.headers.get('Content-Length'));if(size>30*1024*1024)return json({error:'记录超过单次同步容量，请先导出备份。'},413);
    const text=await request.text();if(encoder.encode(text).length>30*1024*1024)return json({error:'记录超过单次同步容量，请先导出备份。'},413);
@@ -479,7 +479,7 @@ async function apiRequest(event,path){
    const job=writeQueue.then(()=>mergeAndSave(incoming,active,change));writeQueue=job.catch(()=>{});return json(await job);
   }
   return json({error:'未找到操作。'},404);
- }catch(error){if(error.status===401){await forget();return json({error:'请重新登录。'},401);}return json({error:error.message||'同步未完成，本机记录已保留。'},502);}
+ }catch(error){if(error.status===401){await forget();return json({error:'请重新登入。'},401);}return json({error:error.message||'同步未完成，本机记录已保留。'},502);}
 }
 async function openFile(active,path,change){
  if(!manifestPromise)manifestPromise=manifest(active).catch(error=>{manifestPromise=null;throw error;});
