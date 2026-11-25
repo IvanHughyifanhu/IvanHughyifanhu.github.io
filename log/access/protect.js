@@ -17,7 +17,7 @@
  // Existing signed-in pages must discover releases too, without clearing their
  // session, IndexedDB or unfinished drafts. A revision-specific worker avoids
  // an older cached worker URL continuing to serve a previous application.
- function editing(){return !!document.querySelector('dialog[open],.project-picker[open]')||!!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]');}
+ function editing(){return !!document.querySelector('dialog[open],.project-picker[open],.type-picker[open]')||!!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]');}
  async function reloadRelease(){
   if(editing()){pendingReload=true;return;}await window.LogPrepareForLogin?.();if(editing()){pendingReload=true;return;}if(!redirecting){pendingReload=false;location.reload();}
  }

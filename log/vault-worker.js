@@ -1,8 +1,14 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "fd29e7ecab27e5e5f652916d6066a95d64a36e26", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "c4a60a75a808fbbb15c1292977aad87e8845e50b", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
+// Display old versions through the six current types without rewriting their immutable events.
+const RECORD_TYPES=Object.freeze({finance:'财务',deadline:'DDL',calendar:'日程',note:'想法',action:'行动',excerpt:'摘抄'});
+function recordType(data){const d=typeof data==='string'?{type:data}:data||{};return d.type==='artifact'?'note':d.type==='calendar'&&d.calendar?.kind==='deadline'?'deadline':d.type;}
+function recordTypeLabel(data){return RECORD_TYPES[recordType(data)]||'想法';}
+function isScheduledRecord(data){return ['calendar','deadline'].includes(recordType(data));}
+function recordCalendar(data){return {...data.calendar,kind:recordType(data)==='deadline'?'deadline':'event',time:data.calendar?.time||''};}
 // Monetary values are integer fen. Revisions replace the displayed head, never add to it.
 function parseAmountMinor(value){
   const text=String(value).trim();if(!/^\d+(?:\.\d{1,2})?$/.test(text))throw new Error('金额请填写大于0的数字，最多两位小数');
@@ -16,7 +22,7 @@ function moneyLabel(minor,sign='auto'){
 }
 function financeSignedMinor(finance){return finance.direction==='expense'?-finance.amountMinor:finance.amountMinor;}
 function financeTone(minor){return minor>0?'income':minor<0?'expense':'neutral';}
-function matchesRecordType(record,type){return !type||record.heads.some(h=>(h.data.type==='artifact'?'note':h.data.type)===type);}
+function matchesRecordType(record,type){return !type||record.heads.some(h=>recordType(h.data)===type);}
 function recordProjectIds(data={}){
   return [...new Set((Array.isArray(data.projectIds)?data.projectIds:[data.projectId]).filter(id=>typeof id==='string'&&id))];
 }
@@ -86,7 +92,7 @@ function validateEvents(events) {
   for (const e of events) {
     if (!e || typeof e.id!=='string' || !e.id || typeof e.recordId!=='string' || !e.recordId || !Array.isArray(e.parents) || !['create','revise','archive','restore','resolve'].includes(e.op) || !Number.isFinite(Date.parse(e.at))) throw new Error('事件格式无效');
     if (ids.has(e.id)) throw new Error('备份内有重复事件编号');
-    if (!e.data || typeof e.data.text!=='string' || !e.data.text.trim() || e.data.text.length>20000 || typeof e.data.archived!=='boolean' || typeof e.data.projectId!=='string' || !['note','action','calendar','artifact','finance'].includes(e.data.type)) throw new Error('内容格式无效');
+    if (!e.data || typeof e.data.text!=='string' || !e.data.text.trim() || e.data.text.length>20000 || typeof e.data.archived!=='boolean' || typeof e.data.projectId!=='string' || (!Object.hasOwn(RECORD_TYPES,e.data.type)&&e.data.type!=='artifact')) throw new Error('内容格式无效');
     if(e.data.projectIds!==undefined&&(!Array.isArray(e.data.projectIds)||e.data.projectIds.some(id=>typeof id!=='string'||!id)||new Set(e.data.projectIds).size!==e.data.projectIds.length||e.data.projectId!==(e.data.projectIds[0]||'')))throw new Error('项目关联格式无效');
     dayWindow(e.data.date);
     if(e.data.type==='finance'){const f=e.data.finance;if(!f||!['income','expense'].includes(f.direction)||f.currency!=='CNY'||!Number.isSafeInteger(f.amountMinor)||f.amountMinor<=0)throw new Error('财务金额或收支类型无效');}
@@ -182,7 +188,7 @@ function shiftSelection(date,unit,delta){
   return unit==='day'?dateOffset(date,delta):monthOffset(range.start.slice(0,7),delta*(unit==='quarter'?3:unit==='year'?12:1))+'-01';
 }
 function calendarTimeLabel(calendar={}){
-  return calendar.time?calendar.time+(calendar.endTime?'–'+calendar.endTime:''):calendar.kind==='deadline'?'ddl':'全天';
+  return calendar.time?calendar.time+(calendar.endTime?'–'+calendar.endTime:''):calendar.kind==='deadline'?'DDL':'全天';
 }
 // All views, including the day page, consume this same read model.
 function buildCalendarItems(config,events,start,end,projectId=''){
@@ -192,9 +198,9 @@ function buildCalendarItems(config,events,start,end,projectId=''){
   const items=[];
   for(const record of materialize(events))for(const head of record.heads){
     const d=head.data;if(d.archived||d.date<start||d.date>end||!recordInProject(d,projectId))continue;
-    const kind=record.conflict?'conflict':d.type==='calendar'?(d.calendar?.kind==='deadline'?'deadline':'calendar'):d.type==='artifact'?'note':d.type;
-    const time=d.type==='calendar'?(d.calendar?.time||''):'';
-    items.push({id:`record:${record.id}:${head.id}`,recordId:record.id,date:d.date,title:d.text,kind,finance:d.finance,source:'record',recordType:d.type==='artifact'?'note':d.type,projectId:d.projectId,projectIds:recordProjectIds(d),time,timeLabel:d.type==='calendar'?calendarTimeLabel(d.calendar):kind==='action'?'行动':kind==='finance'?'财务':kind==='conflict'?'待合并':'备忘',location:d.calendar?.location||'',createdAt:head.at,conflict:record.conflict});
+    const type=recordType(d),scheduled=isScheduledRecord(d),kind=record.conflict?'conflict':type;
+    const time=scheduled?(d.calendar?.time||''):'';
+    items.push({id:`record:${record.id}:${head.id}`,recordId:record.id,date:d.date,title:d.text,kind,finance:d.finance,source:'record',recordType:type,projectId:d.projectId,projectIds:recordProjectIds(d),time,timeLabel:scheduled?calendarTimeLabel(recordCalendar(d)):kind==='conflict'?'待合并':recordTypeLabel(d),location:d.calendar?.location||'',createdAt:head.at,conflict:record.conflict});
   }
   return items.sort((x,y)=>x.date.localeCompare(y.date)||(x.time||'').localeCompare(y.time||'')||(x.createdAt||'').localeCompare(y.createdAt||'')||x.id.localeCompare(y.id));
 }
@@ -204,9 +210,9 @@ function projectGanttRows(projects,events,range){
   return projects.flatMap(project=>{
     if(project.archived)return [];
     const linked=records.filter(r=>r.heads.some(h=>!h.data.archived&&recordInProject(h.data,project.id)&&h.data.date>=range.start&&h.data.date<=range.end));
-    const milestones=linked.filter(r=>!r.conflict&&r.data.type==='calendar').map(r=>{
+    const milestones=linked.filter(r=>!r.conflict&&isScheduledRecord(r.data)).map(r=>{
       const [t]=dayWindow(r.data.date);
-      return {recordId:r.id,date:r.data.date,title:r.data.text,kind:r.data.calendar?.kind==='deadline'?'deadline':'calendar',left:((t-a+DAY/2)/duration)*100};
+      return {recordId:r.id,date:r.data.date,title:r.data.text,kind:recordType(r.data),left:((t-a+DAY/2)/duration)*100};
     });
     if(!project.period)return [{project,records:linked.length,milestones,bar:null}];
     const [ps]=dayWindow(project.period.start),[,pe]=dayWindow(project.period.end),left=Math.max(ps,a),right=Math.min(pe,b);
