@@ -1,5 +1,5 @@
 'use strict';
-const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "64c2292b1f31671da9943908b587dca481825170", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
+const CONFIG={"owner": "IvanHughyifanhu", "ownerId": 199221372, "repository": "log-private", "branch": "main", "basePath": "/log/", "origin": "https://ivanhughyifanhu.github.io", "revision": "e63fc8b160384a8472ed94b37cd48d97f0e3c82c", "authMode": "github-oauth-v1", "repositoryId": 1465610041, "clientId": "Iv23liGTfG85bzFWYTzV", "relay": "https://log-login-ivanhughyifanhu.netlify.app/.netlify/functions/github-login"};
 // Pure data rules used by the prototype and its tests.
 const SCHEMA = 'journal-events-v1';
 const DAY = 86400000;
@@ -8,7 +8,10 @@ const RECORD_TYPES=Object.freeze({finance:'财务',deadline:'DDL',calendar:'日�
 function recordType(data){const d=typeof data==='string'?{type:data}:data||{};return d.type==='artifact'?'note':d.type==='calendar'&&d.calendar?.kind==='deadline'?'deadline':d.type;}
 function recordTypeLabel(data){return RECORD_TYPES[recordType(data)]||'想法';}
 function isScheduledRecord(data){return ['calendar','deadline'].includes(recordType(data));}
-function recordCalendar(data){return {...data.calendar,kind:recordType(data)==='deadline'?'deadline':'event',time:data.calendar?.time||''};}
+// A deadline is a point. Legacy ranges retain their original fields in immutable events.
+function deadlinePoint(data){return data.calendar?.endTime||data.calendar?.time||'';}
+function recordCalendar(data){return recordType(data)==='deadline'?{kind:'deadline',time:deadlinePoint(data),endTime:'',location:''}:{...data.calendar,kind:'event',time:data.calendar?.time||''};}
+function deadlineCalendarForEdit(original,time){return recordType(original)==='deadline'&&original.calendar&&deadlinePoint(original)===time?{...original.calendar,kind:'deadline'}:{kind:'deadline',time};}
 // Monetary values are integer fen. Revisions replace the displayed head, never add to it.
 function parseAmountMinor(value){
   const text=String(value).trim();if(!/^\d+(?:\.\d{1,2})?$/.test(text))throw new Error('金额请填写大于0的数字，最多两位小数');
@@ -199,8 +202,8 @@ function buildCalendarItems(config,events,start,end,projectId=''){
   for(const record of materialize(events))for(const head of record.heads){
     const d=head.data;if(d.archived||d.date<start||d.date>end||!recordInProject(d,projectId))continue;
     const type=recordType(d),scheduled=isScheduledRecord(d),kind=record.conflict?'conflict':type;
-    const time=scheduled?(d.calendar?.time||''):'';
-    items.push({id:`record:${record.id}:${head.id}`,recordId:record.id,date:d.date,title:d.text,kind,finance:d.finance,source:'record',recordType:type,projectId:d.projectId,projectIds:recordProjectIds(d),time,timeLabel:scheduled?calendarTimeLabel(recordCalendar(d)):kind==='conflict'?'待合并':recordTypeLabel(d),location:d.calendar?.location||'',createdAt:head.at,conflict:record.conflict});
+    const calendar=scheduled?recordCalendar(d):null,time=calendar?.time||'';
+    items.push({id:`record:${record.id}:${head.id}`,recordId:record.id,date:d.date,title:d.text,kind,finance:d.finance,source:'record',recordType:type,projectId:d.projectId,projectIds:recordProjectIds(d),time,timeLabel:scheduled?calendarTimeLabel(calendar):kind==='conflict'?'待合并':recordTypeLabel(d),location:calendar?.location||'',createdAt:head.at,conflict:record.conflict});
   }
   return items.sort((x,y)=>x.date.localeCompare(y.date)||(x.time||'').localeCompare(y.time||'')||(x.createdAt||'').localeCompare(y.createdAt||'')||x.id.localeCompare(y.id));
 }
